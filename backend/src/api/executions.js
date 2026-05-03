@@ -27,32 +27,13 @@ router.get("/:id", async (req, res, next) => {
       "SELECT * FROM executions WHERE id=$1", [req.params.id],
     );
     if (execs.length === 0) throw new NotFoundError("execution");
-
-    // The worker writes one row per status event (running, retrying,
-    // success/failed/skipped). For the UI we only want the LATEST state per
-    // node — so a node currently running shows as "running", and a finished
-    // node shows as "success" (not both). Inner DISTINCT ON picks the latest
-    // row per node_name; outer ORDER BY puts them back in execution order.
-    const { rows: logs } = await pool.query(
-      `SELECT * FROM (
-         SELECT DISTINCT ON (node_name)
-           id, node_name, status, attempt, input, output, error, started_at, finished_at
-         FROM node_logs
-         WHERE execution_id = $1
-         ORDER BY node_name,
-                  COALESCE(finished_at, started_at) DESC NULLS LAST,
-                  attempt DESC,
-                  id DESC
-       ) latest
-       ORDER BY COALESCE(latest.started_at, latest.finished_at) ASC NULLS LAST,
-                latest.id ASC`,
-      [req.params.id],
-    );
-    res.json({ ...execs[0], nodeLogs: logs });
+    // Per-node history is no longer in Postgres — clients should read the
+    // post-execution summary from executions.context.nodes (the engine's ctx).
+    res.json(execs[0]);
   } catch (e) { next(e); }
 });
 
-/** DELETE /executions/:id — remove an execution and its node_logs (cascade). */
+/** DELETE /executions/:id — remove an execution row. */
 router.delete("/:id", async (req, res, next) => {
   try {
     const { rowCount } = await pool.query(

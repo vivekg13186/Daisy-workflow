@@ -7,7 +7,7 @@ data:
 nodes:
   - name: fetch-each
     action: http.request
-    batchOver: "${data.ids}"
+    batchOver: "${ids}"
     inputs:
       url: "https://jsonplaceholder.typicode.com/posts/${item}"
 

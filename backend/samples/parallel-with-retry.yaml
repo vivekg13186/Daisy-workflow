@@ -8,7 +8,7 @@ nodes:
   - name: fetch-post
     action: http.request
     inputs:
-      url: "https://jsonplaceholder.typicode.com/posts/${data.postId}"
+      url: "https://jsonplaceholder.typicode.com/posts/${postId}"
     outputs:
       title: body.title
       userId: body.userId

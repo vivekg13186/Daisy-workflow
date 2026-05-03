@@ -4,21 +4,21 @@ import GraphView from "./GraphView.vue";
 import { useGraphsStore } from "../stores/graphs.js";
 import BatchOutputTable from "./BatchOutputTable.vue";
 import InputsTable from "./InputsTable.vue";
-import NodeLogTable from "./NodeLogTable.vue";
+import NodesTable from "./NodesTable.vue";
 
 const store = useGraphsStore();
 const tab = computed(() => store.activeExecTab);
 
 // Prefer the parsed DSL we cached on the execution tab itself (loaded eagerly
 // in store.openExecution). Fall back to any open editor tab for the parent
-// graph, then to a name-only synthesis from logs.
+// graph, then to a name-only synthesis from the engine's per-node summary.
 const parsed = computed(() => {
   const t = tab.value;
   if (!t) return null;
   if (t.graphParsed) return t.graphParsed;
   const editor = store.tabs.find(x => x.kind === "graph" && x.graphId === t.graphId);
   if (editor?.parsed) return editor.parsed;
-  const names = [...new Set((t.data?.nodeLogs || []).map(l => l.node_name))];
+  const names = Object.keys(t.data?.context?.nodes || {});
   return names.length ? { nodes: names.map(n => ({ name: n, action: "" })), edges: [] } : null;
 });
 
@@ -49,7 +49,8 @@ const batchItems = computed(() => {
   return tab.value.data.context.items;
 });
 const inputContext = computed(() => isBatch.value ? null : (userInputs.value || {}));
-const nodeLogs = computed(() => tab.value?.data?.nodeLogs || []);
+// The engine's per-node summary lives in execution.context.nodes.
+const ctxNodes = computed(() => tab.value?.data?.context?.nodes || {});
 
 // Rows for the inputs table — one row per top-level key in the user's JSON.
 const inputRows = computed(() => {
@@ -112,8 +113,8 @@ async function onRefresh() {
       <InputsTable v-else :rows="inputRows"></InputsTable>
     </q-expansion-item>
  
-    <q-expansion-item dense dense-toggle default-opened label="Node logs" header-class="bg-grey-11">
-      <NodeLogTable :rows="nodeLogs" />
+    <q-expansion-item dense dense-toggle default-opened label="Nodes" header-class="bg-grey-11">
+      <NodesTable :ctx-nodes="ctxNodes" />
     </q-expansion-item>
 
   </div>

@@ -184,8 +184,9 @@ export const useGraphsStore = defineStore("graphs", {
       // Fetch persisted snapshot.
       try { t.data = await Executions.get(execId); }
       catch { /* not persisted yet */ }
-      // Seed nodeStatus from the persisted logs.
-      for (const l of (t.data?.nodeLogs || [])) t.nodeStatus[l.node_name] = l.status;
+      // REPLACE nodeStatus (don't merge) so stale entries from a previous
+      // load can't survive into the new render.
+      t.nodeStatus = nodeStatusFromData(t.data);
 
       // Make sure we have the parent graph's parsed DSL so the viewer can render
       // the full DAG (with edges), even if the user never opened the editor tab.
@@ -209,7 +210,13 @@ export const useGraphsStore = defineStore("graphs", {
           t.liveEvents.unshift(evt);
           if (evt.type === "node:status") t.nodeStatus[evt.node] = evt.status;
           if (evt.type === "execution:end") {
-            try { t.data = await Executions.get(execId); } catch {}
+            // Re-pull the persisted snapshot AND re-seed nodeStatus so any
+            // status updates that the WS missed (or arrived out of order) get
+            // reconciled from the source of truth.
+            try {
+              t.data = await Executions.get(execId);
+              t.nodeStatus = nodeStatusFromData(t.data);
+            } catch {}
           }
         });
       }
@@ -273,12 +280,8 @@ export const useGraphsStore = defineStore("graphs", {
       try {
         const data = await Executions.get(t.execId);
         t.data = data;
-        // Rebuild nodeStatus from the latest persisted logs (last status wins).
-        const next = {};
-        for (const l of (data?.nodeLogs || [])) next[l.node_name] = l.status;
-        t.nodeStatus = next;
+        t.nodeStatus = nodeStatusFromData(data);
       } catch (e) {
-        // surface in console; UI can't easily recover from a 404 on a deleted execution
         console.warn("refreshExecution failed", e);
       }
     },
@@ -290,4 +293,31 @@ function formatError(e) {
   if (!data) return e.message;
   const details = (data.details || []).map(d => ` • ${d.path || ""} ${d.message || ""}`).join("\n");
   return `${data.message}${details ? "\n" + details : ""}`;
+}
+
+/**
+ * Build the { nodeName -> status } map used to color the GraphView, sourcing
+ * from execution.context.nodes. For batch executions the per-item ctx lives
+ * under context.items[i].nodes — we OR them together so a node shows the
+ * "worst" status across items (failed > running > skipped > success).
+ */
+function nodeStatusFromData(data) {
+  if (!data?.context) return {};
+  const ctx = data.context;
+  if (Array.isArray(ctx.items)) {
+    const merged = {};
+    const rank = { failed: 4, running: 3, retrying: 3, skipped: 2, pending: 1, success: 0 };
+    for (const item of ctx.items) {
+      const ns = item?.ctx?.nodes || item?.nodes || {};
+      for (const [name, n] of Object.entries(ns)) {
+        const s = n?.status;
+        if (!s) continue;
+        if (!merged[name] || (rank[s] || 0) > (rank[merged[name]] || 0)) merged[name] = s;
+      }
+    }
+    return merged;
+  }
+  const out = {};
+  for (const [name, n] of Object.entries(ctx.nodes || {})) out[name] = n?.status || "pending";
+  return out;
 }

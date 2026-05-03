@@ -8,7 +8,7 @@ nodes:
   - name: greet
     action: log
     inputs:
-      message: "Hello, ${data.who}!"
+      message: "Hello, ${who}!"
 
   - name: pause
     action: delay

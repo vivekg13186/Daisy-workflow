@@ -32,20 +32,17 @@ export async function executeDag(parsed, opts = {}) {
   const { adj, indegree, byName, roots } = buildDag(parsed);
   const remaining = new Map(indegree);                 // mutable copy
 
-  // Build the root context.
-  //   - parsed.data fields are exposed BOTH at the root (so `${url}` works)
-  //     and under `data.*` (so `${data.url}` also works).
-  //   - User-supplied initialData overlays parsed.data.
+  // Slim context:
+  //   - parsed.data fields and user input are merged flat at the root, so
+  //     expressions like ${url} resolve directly.
   //   - Each node's outputs:[{pluginField: ctxVar}] writes ctxVar at the root
-  //     (e.g. `${weatherResult}`).
-  //   - The full per-node output is also kept under `nodes.X.output` for
-  //     introspection (`${nodes.fetch.output.body.id}`).
-  const dataMerged = { ...(parsed.data || {}), ...(opts.initialData || {}) };
+  //     (e.g. ${weatherResult}).
+  //   - The full per-node record (status / output / timings / attempts) lives
+  //     under nodes.<name> for introspection (${nodes.fetch.output.body.id}).
   const ctx = {
-    ...dataMerged,
-    data: dataMerged,
+    ...(parsed.data || {}),
+    ...(opts.initialData || {}),
     nodes: {},
-    env: {},
   };
   const nodeResults = {};                             // status per node
   let aborted = false;
@@ -55,11 +52,29 @@ export async function executeDag(parsed, opts = {}) {
     emitter.emit(event, { executionId, ...payload, at: new Date().toISOString() });
   }
 
+  // Single source of truth for "this node finished with status X" — keeps
+  // nodeResults (engine-internal) and ctx.nodes (persisted to executions.context
+  // and read by the UI) in lockstep. Without this, several failure paths used
+  // to update nodeResults only, leaving ctx.nodes missing entries — which made
+  // the GraphView render the affected nodes as "pending" forever.
+  function recordOutcome(name, record) {
+    nodeResults[name] = record;
+    ctx.nodes[name] = {
+      status: record.status,
+      output: record.output ?? null,
+      error: record.error ?? null,
+      reason: record.reason ?? null,
+      startedAt: record.startedAt ?? null,
+      finishedAt: record.finishedAt ?? null,
+      attempts: record.attempts ?? null,
+    };
+  }
+
   // Mark every still-unrun node as skipped (used on terminate).
   function skipRest(reason) {
     for (const name of byName.keys()) {
       if (!nodeResults[name]) {
-        nodeResults[name] = { status: NodeStatus.SKIPPED, reason };
+        recordOutcome(name, { status: NodeStatus.SKIPPED, reason });
         emit("node:status", { node: name, status: NodeStatus.SKIPPED, reason });
       }
     }
@@ -71,13 +86,12 @@ export async function executeDag(parsed, opts = {}) {
       let cond = false;
       try { cond = evalCondition(node.executeIf, ctx); }
       catch (e) {
-        nodeResults[node.name] = { status: NodeStatus.FAILED, error: `executeIf eval failed: ${e.message}` };
+        recordOutcome(node.name, { status: NodeStatus.FAILED, error: `executeIf eval failed: ${e.message}` });
         emit("node:status", { node: node.name, status: NodeStatus.FAILED, error: e.message });
         return;
       }
       if (!cond) {
-        nodeResults[node.name] = { status: NodeStatus.SKIPPED, reason: "executeIf=false" };
-        ctx.nodes[node.name] = { status: NodeStatus.SKIPPED, output: null };
+        recordOutcome(node.name, { status: NodeStatus.SKIPPED, reason: "executeIf=false" });
         emit("node:status", { node: node.name, status: NodeStatus.SKIPPED, reason: "executeIf=false" });
         return;
       }
@@ -88,7 +102,7 @@ export async function executeDag(parsed, opts = {}) {
     let resolvedInputs;
     try { resolvedInputs = resolve(rawInputs, ctx); }
     catch (e) {
-      nodeResults[node.name] = { status: NodeStatus.FAILED, error: `input resolve failed: ${e.message}` };
+      recordOutcome(node.name, { status: NodeStatus.FAILED, error: `input resolve failed: ${e.message}` });
       emit("node:status", { node: node.name, status: NodeStatus.FAILED, error: e.message });
       return handleFailure(node, e);
     }
@@ -98,12 +112,14 @@ export async function executeDag(parsed, opts = {}) {
     if (node.batchOver) {
       try { batchItems = resolve(node.batchOver, ctx); }
       catch (e) {
-        nodeResults[node.name] = { status: NodeStatus.FAILED, error: `batchOver eval failed: ${e.message}` };
+        recordOutcome(node.name, { status: NodeStatus.FAILED, error: `batchOver eval failed: ${e.message}` });
+        emit("node:status", { node: node.name, status: NodeStatus.FAILED, error: e.message });
         return handleFailure(node, e);
       }
       if (!Array.isArray(batchItems)) {
         const err = new Error(`batchOver did not resolve to an array (got ${typeof batchItems})`);
-        nodeResults[node.name] = { status: NodeStatus.FAILED, error: err.message };
+        recordOutcome(node.name, { status: NodeStatus.FAILED, error: err.message });
+        emit("node:status", { node: node.name, status: NodeStatus.FAILED, error: err.message });
         return handleFailure(node, err);
       }
     }
@@ -154,30 +170,25 @@ export async function executeDag(parsed, opts = {}) {
         attempts = r.attempts;
       }
     } catch (e) {
-      nodeResults[node.name] = {
-        status: NodeStatus.FAILED, error: e.message, startedAt,
-        finishedAt: new Date().toISOString(),
-      };
-      ctx.nodes[node.name] = { status: NodeStatus.FAILED, output: null, error: e.message };
+      recordOutcome(node.name, {
+        status: NodeStatus.FAILED, error: e.message,
+        startedAt, finishedAt: new Date().toISOString(),
+      });
       emit("node:status", { node: node.name, status: NodeStatus.FAILED, error: e.message });
       return handleFailure(node, e);
     }
 
     // 4. Surface the node's outputs into ctx.
-    //   - Full raw plugin output lives at  ctx.nodes[name].output
     //   - Each `outputs: { pluginField: ctxVar }` mapping writes the named
     //     subfield to the ROOT of ctx (so downstream nodes do `${ctxVar}`).
+    //   - Full raw plugin output is also kept on ctx.nodes[name].output via
+    //     recordOutcome below.
     const finishedAt = new Date().toISOString();
     applyOutputMapping(output, node.outputs, ctx);
-    ctx.nodes[node.name] = {
-      status: NodeStatus.SUCCESS,
-      output,
-      startedAt,
-      finishedAt,
-      attempts,
-    };
+    recordOutcome(node.name, {
+      status: NodeStatus.SUCCESS, output, attempts, startedAt, finishedAt,
+    });
     const nodeOutput = output;
-    nodeResults[node.name] = { status: NodeStatus.SUCCESS, attempts, startedAt, finishedAt };
     emit("node:status", {
       node: node.name, status: NodeStatus.SUCCESS, output: nodeOutput, attempts, startedAt, finishedAt,
     });
@@ -207,6 +218,15 @@ export async function executeDag(parsed, opts = {}) {
   }
 
   if (aborted) skipRest(aborting?.reason || "aborted");
+
+  // Final reconciliation: any declared node that didn't get an outcome (e.g.
+  // engine bug, unexpected throw) is recorded as skipped so the persisted
+  // ctx.nodes always has a row per declared node — UI never shows "pending".
+  for (const name of byName.keys()) {
+    if (!nodeResults[name]) {
+      recordOutcome(name, { status: NodeStatus.SKIPPED, reason: "not reached" });
+    }
+  }
 
   // Aggregate status.
   const statuses = Object.values(nodeResults).map(r => r.status);

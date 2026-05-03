@@ -57,6 +57,7 @@ function onCloseTab() {
 
 <template>
   <div class="workspace column no-wrap full-height">
+    <!--
     <q-toolbar>
 
       <q-select v-if="store.tabs.length" v-model="store.activeId"
@@ -69,6 +70,7 @@ function onCloseTab() {
           </q-item>
         </template>
       </q-select>
+
       <q-space />
       <q-btn round outline color="primary" size="sm" no-caps icon="close" :disable="!store.activeId"
         @click="onCloseTab">
@@ -76,6 +78,7 @@ function onCloseTab() {
       </q-btn>
 
     </q-toolbar>
+        -->
 
     <!-- Editor toolbar (only for editor tabs) -->
     <q-toolbar v-if="isEditor" dense class="q-py-xs bg-grey-11" style="min-height: 36px;">

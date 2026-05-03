@@ -1,5 +1,4 @@
 import { Worker } from "bullmq";
-import { v4 as uuid } from "uuid";
 import { EventEmitter } from "node:events";
 import { config } from "./config.js";
 import { QUEUE_NAME, redisConnection } from "./queue/queue.js";
@@ -10,6 +9,7 @@ import { executeBatch } from "./engine/batch.js";
 import { loadBuiltins } from "./plugins/registry.js";
 import { publish } from "./ws/broadcast.js";
 import { log } from "./utils/logger.js";
+import { logNodeEvent } from "./utils/eventLog.js";
 
 await loadBuiltins();
 
@@ -46,33 +46,25 @@ async function processExecution(job) {
                    : Array.isArray(userContext?.items) ? userContext.items
                    : null;
   const isBatch = Array.isArray(batchItems);
-  const initialData = isBatch ? {} : { ...userContext, input: userContext };
+  // Flat shape: user keys end up directly on ctx (e.g. ${ids}, ${url}).
+  const initialData = isBatch ? {} : (userContext && typeof userContext === "object" ? userContext : {});
 
-  // Wire engine events into Postgres + WS.
+  // Wire engine events into the WebSocket broadcaster + the JSONL event log.
+  // Per-node history is no longer persisted to Postgres — the post-execution
+  // summary lives in executions.context.nodes (written below).
   const emitter = new EventEmitter();
-  emitter.on("node:status", async (evt) => {
-    await publish({ type: "node:status", ...evt });
-    try {
-      await pool.query(
-        `INSERT INTO node_logs (id, execution_id, node_name, status, attempt, input, output, error, started_at, finished_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9::timestamptz, NOW()),$10::timestamptz)`,
-        [
-          uuid(),
-          executionId,
-          evt.node,
-          evt.status,
-          evt.attempt || 1,
-          evt.input ? JSON.stringify(evt.input) : null,
-          evt.output ? JSON.stringify(evt.output) : null,
-          evt.error || null,
-          evt.startedAt || null,
-          evt.finishedAt || null,
-        ],
-      );
-    } catch (e) { log.warn("node_log insert failed", { error: e.message }); }
+  emitter.on("node:status", (evt) => {
+    publish({ type: "node:status", executionId, ...evt }).catch(() => {});
+    logNodeEvent({ type: "node:status", executionId, graphId, ...evt });
   });
-  emitter.on("execution:start", evt => publish({ type: "execution:start", ...evt }));
-  emitter.on("execution:end",   evt => publish({ type: "execution:end",   ...evt }));
+  emitter.on("execution:start", (evt) => {
+    publish({ type: "execution:start", ...evt }).catch(() => {});
+    logNodeEvent({ type: "execution:start", executionId, graphId, ...evt });
+  });
+  emitter.on("execution:end", (evt) => {
+    publish({ type: "execution:end", ...evt }).catch(() => {});
+    logNodeEvent({ type: "execution:end", executionId, graphId, ...evt });
+  });
 
   let result;
   try {
