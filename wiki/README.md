@@ -14,4 +14,8 @@ A YAML-driven DAG workflow engine with pluggable actions, parallel execution, re
 - Sample workflows: [`backend/samples/`](../backend/samples/)
 - Backend code: [`backend/src/`](../backend/src/)
 - Frontend code: [`frontend/src/`](../frontend/src/)
-- Architecture diagram: [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
+- Architecture diagram: [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+
+
+> [!NOTE]  
+> This application is developed with the support of AI agents.
