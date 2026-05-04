@@ -1,0 +1,83 @@
+name: csv-to-excel-pipeline
+version: "1.0"
+description: |
+  Demonstrates the file / csv / excel plugins end-to-end.
+
+  1. Generate a small CSV on disk (file.write).
+  2. Read it back as objects (csv.read).
+  3. List the working directory (file.list).
+  4. Write a multi-sheet .xlsx (excel.write).
+  5. Read the workbook to verify (excel.read).
+  6. Clean up.
+
+  Set FILE_ROOT in the backend env to sandbox these paths to a folder.
+
+data:
+  workDir: "./tmp"
+  csvPath: "./tmp/people.csv"
+  xlsxPath: "./tmp/people.xlsx"
+
+nodes:
+  - name: ensure-dir
+    action: file.write
+    inputs:
+      path:    "${workDir}/.gitkeep"
+      content: ""
+      mkdir:   true
+
+  - name: write-csv
+    action: file.write
+    inputs:
+      path:    "${csvPath}"
+      mkdir:   true
+      content: |
+        name,age,city
+        Alice,30,Berlin
+        Bob,25,Paris
+        Carol,42,Tokyo
+
+  - name: read-csv
+    action: csv.read
+    inputs:
+      path: "${csvPath}"
+
+  - name: list-files
+    action: file.list
+    inputs:
+      path: "${workDir}"
+      pattern: "*.csv"
+
+  - name: write-xlsx
+    action: excel.write
+    inputs:
+      path: "${xlsxPath}"
+      sheets:
+        - name: People
+          rows: "${nodes.read-csv.output.rows}"
+        - name: Cities
+          headers: ["city", "count"]
+          rows:
+            - { city: Berlin, count: 1 }
+            - { city: Paris,  count: 1 }
+            - { city: Tokyo,  count: 1 }
+
+  - name: verify-xlsx
+    action: excel.read
+    inputs:
+      path: "${xlsxPath}"
+      allSheets: true
+
+  - name: cleanup
+    action: file.delete
+    inputs:
+      path: "${workDir}"
+      recursive: true
+      missingOk: true
+
+edges:
+  - { from: ensure-dir,  to: write-csv }
+  - { from: write-csv,   to: read-csv }
+  - { from: read-csv,    to: list-files }
+  - { from: list-files,  to: write-xlsx }
+  - { from: write-xlsx,  to: verify-xlsx }
+  - { from: verify-xlsx, to: cleanup }

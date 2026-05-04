@@ -48,4 +48,24 @@ export const config = {
     baseUrl:   process.env.AI_BASE_URL || aiDefaults[aiProvider]?.baseUrl  || "https://api.openai.com/v1",
     maxTokens: parseInt(process.env.AI_MAX_TOKENS || "2048", 10),
   },
+
+  // Optional sandbox root for the file/csv/excel plugins. When set, every
+  // plugin path is resolved relative to this directory and refuses any value
+  // that would escape it. When unset, paths resolve against process.cwd() and
+  // the plugins can touch anywhere the worker process has access to — fine
+  // for self-hosted single-user setups, dangerous in shared deployments.
+  fileRoot: process.env.FILE_ROOT || "",
+
+  // Default SMTP transport for the email.send plugin. Each plugin call may
+  // override host/port/secure/user/pass via its `smtp` input.
+  // Set SMTP_HOST=json to use the dry-run "JSON transport" — nodemailer just
+  // logs the rendered message instead of contacting a server (handy for tests).
+  email: {
+    host:   process.env.SMTP_HOST   || "",
+    port:   parseInt(process.env.SMTP_PORT || "587", 10),
+    secure: String(process.env.SMTP_SECURE || "").toLowerCase() === "true",
+    user:   process.env.SMTP_USER   || "",
+    pass:   process.env.SMTP_PASS   || "",
+    from:   process.env.SMTP_FROM   || "",
+  },
 };

@@ -1,0 +1,48 @@
+name: email-on-event
+version: "1.0"
+description: |
+  Fetch a JSON post and email a summary. Configure SMTP_* env vars on the backend
+  (or set SMTP_HOST=json for dry-run). The Run dialog can override `to` / `from`
+  via the JSON input.
+
+data:
+  postId: 1
+  to: "ops@example.com"
+
+nodes:
+  - name: fetch
+    action: http.request
+    inputs:
+      url: "https://jsonplaceholder.typicode.com/posts/${postId}"
+    retry: 2
+    retryDelay: "500ms"
+
+  - name: notify
+    action: email.send
+    executeIf: "${nodes.fetch.output.status == 200}"
+    inputs:
+      to: "${to}"
+      subject: "[DAG] New post #${postId}: ${nodes.fetch.output.body.title}"
+      text: |
+        A workflow run completed.
+
+        Post id:   ${postId}
+        Title:     ${nodes.fetch.output.body.title}
+        Author id: ${nodes.fetch.output.body.userId}
+
+        ---
+        ${nodes.fetch.output.body.body}
+      html: |
+        <h2>${nodes.fetch.output.body.title}</h2>
+        <p><strong>Post #${postId}</strong> by user ${nodes.fetch.output.body.userId}</p>
+        <hr/>
+        <p>${nodes.fetch.output.body.body}</p>
+
+  - name: log-result
+    action: log
+    inputs:
+      message: "Email queued: ${nodes.notify.output.messageId}"
+
+edges:
+  - { from: fetch,  to: notify }
+  - { from: notify, to: log-result }
