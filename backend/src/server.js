@@ -11,6 +11,8 @@ import executionsRouter from "./api/executions.js";
 import pluginsRouter from "./api/plugins.js";
 import aiRouter from "./api/ai.js";
 import triggersRouter from "./api/triggers.js";
+import webhooksRouter from "./api/webhooks.js";
+import configsRouter from "./api/configs.js";
 import { attachWss } from "./ws/broadcast.js";
 
 await loadBuiltins();
@@ -27,6 +29,10 @@ app.use("/executions", executionsRouter);
 app.use("/plugins", pluginsRouter);
 app.use("/ai", aiRouter);
 app.use("/triggers", triggersRouter);
+app.use("/configs",  configsRouter);
+// Public webhook endpoint — bypasses /api proxy in dev because the path is
+// absolute (/webhooks/<id>). External services hit it directly.
+app.use("/webhooks", webhooksRouter);
 
 app.use((err, _req, res, _next) => {
   if (err instanceof HttpError) {

@@ -12,6 +12,7 @@ import { log } from "./utils/logger.js";
 import { logNodeEvent } from "./utils/eventLog.js";
 import { loadTriggerBuiltins } from "./triggers/registry.js";
 import { startTriggerManager, stopTriggerManager } from "./triggers/manager.js";
+import { loadConfigsMap, buildConfigEnv } from "./configs/loader.js";
 
 await loadBuiltins();
 await loadTriggerBuiltins();
@@ -54,6 +55,20 @@ async function processExecution(job) {
   const isBatch = Array.isArray(batchItems);
   // Flat shape: user keys end up directly on ctx (e.g. ${ids}, ${url}).
   const initialData = isBatch ? {} : (userContext && typeof userContext === "object" ? userContext : {});
+
+  // Centralised configurations — exposed two ways to suit different consumers:
+  //   • ctx.config.<name>.<key>      → for ${config.<name>.<key>} expressions
+  //                                     in plugin inputs / executeIf / batchOver
+  //   • ctx.env.CONFIG_<NAME>_<KEY>  → for script-style plugins that expect
+  //                                     env-var-flavoured access
+  // Failure to load configs (DB down, missing table) leaves both as empty
+  // objects so the rest of the run can still proceed.
+  const configsMap = await loadConfigsMap().catch((e) => {
+    log.warn("configs load failed; continuing with empty config", { error: e.message });
+    return {};
+  });
+  initialData.config = configsMap;
+  initialData.env    = { ...buildConfigEnv(configsMap) };
 
   // Wire engine events into the WebSocket broadcaster + the JSONL event log.
   // Per-node history is no longer persisted to Postgres — the post-execution

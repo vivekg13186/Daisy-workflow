@@ -81,7 +81,6 @@ Outputs: ${outputProps || "(none)"}`;
 
 \`\`\`yaml
 name: <flow name>
-version: "1.0"               # major.minor
 description: <free text>     # optional
 data:                        # global constants merged into the root context
   someKey: someValue
@@ -124,7 +123,7 @@ ${pluginDocs}
 - When you generate a workflow, output it inside a fenced \`\`\`yaml block — the UI offers a "Use this YAML" button on those blocks.
 - Reference only plugins listed above; if the user asks for something not covered, suggest the closest plugin or say it doesn't exist.
 - Keep prose answers short; lead with the example.
-- Always set \`name\`, \`version\`, and at least one node + (if multiple nodes) at least one edge.`;
+- Always set \`name\` and at least one node + (if multiple nodes) at least one edge. Do NOT include a \`version\` field — the server tracks versions automatically.`;
 }
 
 function listProps(schema) {

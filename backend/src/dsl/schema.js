@@ -1,13 +1,20 @@
 // JSON Schema for the DAG DSL.
 export const dagSchema = {
   type: "object",
-  required: ["name", "version","nodes"],
+  required: ["name", "nodes"],
   additionalProperties: false,
   properties: {
     name: { type: "string", minLength: 1 },
-    version: { type: "string", pattern: "^\\d+\\.\\d+$" },
+    // version is auto-managed by the API (incremented per save) and is not
+    // part of the user-authored YAML. We still accept the field if present
+    // (e.g. legacy flows) so old YAML keeps validating, but it's optional.
+    version: { type: "string" },
     description: { type: "string" },
     data: { type: "object", additionalProperties: true, default: {} },
+    // Designer-time metadata: AI prompt history, declared inputs/outputs (docs),
+    // and persisted node positions for the visual editor. Free-form so the UI
+    // can extend it without schema bumps.
+    meta: { type: "object", additionalProperties: true, default: {} },
     nodes: {
       type: "array",
       minItems: 1,

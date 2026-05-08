@@ -6,15 +6,33 @@ const router = Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    const { graphId, limit = 50 } = req.query;
+    const { graphId, status, limit = 50 } = req.query;
     const params = [];
-    let where = "";
-    if (graphId) { params.push(graphId); where = "WHERE graph_id=$1"; }
+    const where = [];
+    if (graphId) {
+      params.push(graphId);
+      where.push(`graph_id=$${params.length}`);
+    }
+    // Comma-separated list, e.g. ?status=running,queued
+    if (status) {
+      const wanted = String(status)
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean);
+      if (wanted.length) {
+        params.push(wanted);
+        where.push(`status = ANY($${params.length})`);
+      }
+    }
     params.push(Math.min(parseInt(limit, 10) || 50, 200));
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const { rows } = await pool.query(
-      `SELECT id, graph_id, status, started_at, finished_at, created_at, error
-       FROM executions ${where}
-       ORDER BY created_at DESC LIMIT $${params.length}`,
+      `SELECT e.id, e.graph_id, e.status, e.started_at, e.finished_at, e.created_at, e.error,
+              g.name AS graph_name, g.version AS graph_version
+       FROM executions e
+       LEFT JOIN graphs g ON g.id = e.graph_id
+       ${whereSql}
+       ORDER BY e.created_at DESC LIMIT $${params.length}`,
       params,
     );
     res.json(rows);

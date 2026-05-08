@@ -17,7 +17,9 @@
 import { snippetCompletion } from "@codemirror/autocomplete";
 
 // ---- Schema constants ----
-const TOP_KEYS  = ["name", "version", "description", "data", "nodes", "edges"];
+// Note: `version` intentionally omitted — the server auto-manages versions
+// and the user-authored YAML doesn't carry one.
+const TOP_KEYS  = ["name", "description", "data", "nodes", "edges"];
 const NODE_KEYS = ["name", "action", "description", "inputs", "outputs",
                    "executeIf", "retry", "retryDelay", "onError", "batchOver"];
 const EDGE_KEYS = ["from", "to"];
@@ -26,7 +28,6 @@ const ON_ERROR  = ["continue", "terminate"];
 // Snippets for top-level keys with sensible scaffolding.
 const TOP_SNIPPETS = {
   name:        "name: ${flow-name}",
-  version:     'version: "1.0"',
   description: "description: ${what this flow does}",
   data:        "data:\n  ${key}: ${value}",
   nodes:       "nodes:\n  - name: ${nodeName}\n    action: ${log}\n    inputs:\n      message: \"hi\"",

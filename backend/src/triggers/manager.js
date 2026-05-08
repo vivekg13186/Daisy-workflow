@@ -12,6 +12,8 @@ import { pool } from "../db/pool.js";
 import { enqueueExecution } from "../queue/queue.js";
 import { triggerRegistry } from "./registry.js";
 import { log } from "../utils/logger.js";
+import { resolve as resolveExpressions } from "../dsl/expression.js";
+import { loadConfigsMap } from "../configs/loader.js";
 
 // triggerId -> { row, subscription, lastError }
 const active = new Map();
@@ -57,13 +59,43 @@ export async function syncTrigger(triggerId) {
 }
 
 async function startOne(row) {
+  // Triggers can reference saved configs via ${config.<name>.<key>}, so the
+  // user can wire e.g. an MQTT trigger to a stored broker config instead of
+  // re-typing host/credentials in every trigger. We resolve the expressions
+  // up-front and hand the driver a fully-substituted config blob.
+  const resolvedConfig = await resolveTriggerConfig(row.config);
   const onFire = (payload) => fireTrigger(row, payload).catch(e => {
     log.warn("trigger fire failed", { id: row.id, error: e.message });
   });
-  const subscription = await triggerRegistry.subscribe(row.type, row.config, onFire);
+  const subscription = await triggerRegistry.subscribe(row.type, resolvedConfig, onFire);
   active.set(row.id, { row, subscription, lastError: null });
   await pool.query("UPDATE triggers SET last_error=NULL, updated_at=NOW() WHERE id=$1", [row.id]);
   log.info("trigger started", { id: row.id, type: row.type, name: row.name });
+}
+
+/**
+ * Walk a trigger's config blob and substitute any ${config.<name>.<key>}
+ * placeholders with the live values from the configs table. Anything not
+ * matching a placeholder is returned unchanged (the resolver's contract).
+ *
+ * If loading configs fails the original config is returned — the trigger
+ * driver will then surface a more specific error if the missing field
+ * mattered.
+ */
+async function resolveTriggerConfig(config) {
+  if (!config || typeof config !== "object") return config;
+  let configsMap;
+  try { configsMap = await loadConfigsMap(); }
+  catch (e) {
+    log.warn("trigger config resolve: configs load failed", { error: e.message });
+    return config;
+  }
+  try {
+    return resolveExpressions(config, { config: configsMap });
+  } catch (e) {
+    log.warn("trigger config resolve failed; using raw config", { error: e.message });
+    return config;
+  }
 }
 
 async function stopOne(triggerId) {

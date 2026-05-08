@@ -13,7 +13,14 @@ export const Graphs = {
 };
 
 export const Executions = {
-  list:   (graphId) => api.get("/executions", { params: { graphId } }).then(r => r.data),
+  // Optional filters: { graphId, status (CSV: "running,queued"), limit }.
+  // Legacy callers pass a bare graphId string — still supported.
+  list: (filterOrGraphId) => {
+    const params = (typeof filterOrGraphId === "string" || filterOrGraphId == null)
+      ? (filterOrGraphId ? { graphId: filterOrGraphId } : {})
+      : filterOrGraphId;
+    return api.get("/executions", { params }).then(r => r.data);
+  },
   get:    (id) => api.get(`/executions/${id}`).then(r => r.data),
   remove: (id) => api.delete(`/executions/${id}`),
 };
@@ -28,6 +35,17 @@ export const AI = {
   status: () => api.get("/ai/status").then(r => r.data),
   // messages: [{ role: "user"|"assistant", content: string }]
   chat:   (messages) => api.post("/ai/chat", { messages }).then(r => r.data),
+};
+
+export const Configs = {
+  // [{ type, label, description, fields, freeform }]
+  types:  () => api.get("/configs/types").then(r => r.data),
+  // Lists secrets masked. Use update flow to rotate a secret.
+  list:   () => api.get("/configs").then(r => r.data),
+  get:    (id) => api.get(`/configs/${id}`).then(r => r.data),
+  create: (payload) => api.post("/configs", payload).then(r => r.data),
+  update: (id, patch) => api.put(`/configs/${id}`, patch).then(r => r.data),
+  remove: (id) => api.delete(`/configs/${id}`).then(r => r.data),
 };
 
 export const Triggers = {
