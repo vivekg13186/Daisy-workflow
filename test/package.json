@@ -1,0 +1,25 @@
+{
+  "name": "dag-engine-live-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Live integration tests against a running DAG-engine API (jest + supertest).",
+  "type": "commonjs",
+  "scripts": {
+    "test": "jest --runInBand",
+    "test:log":      "jest --runInBand tests/log.test.js",
+    "test:delay":    "jest --runInBand tests/delay.test.js",
+    "test:transform":"jest --runInBand tests/transform.test.js",
+    "test:http":     "jest --runInBand tests/http.test.js",
+    "test:scrape":   "jest --runInBand tests/web-scrape.test.js",
+    "test:file":     "jest --runInBand tests/file.test.js",
+    "test:csv":      "jest --runInBand tests/csv.test.js",
+    "test:excel":    "jest --runInBand tests/excel.test.js",
+    "test:email":    "jest --runInBand tests/email.test.js",
+    "test:mqtt":     "jest --runInBand tests/mqtt.test.js",
+    "test:sql":      "jest --runInBand tests/sql.test.js"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  }
+}
