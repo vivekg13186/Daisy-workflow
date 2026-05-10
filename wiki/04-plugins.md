@@ -3,7 +3,7 @@
 Built-in plugins, grouped by purpose. Every plugin is a `.js` file under `backend/src/plugins/builtin/` — drop a new file there with the right shape and it auto-registers on the next worker start.
 
 The full set, alphabetically:
-`csv.read`, `csv.write`, `delay`, `email.send`, `excel.read`, `excel.write`, `file.delete`, `file.list`, `file.read`, `file.stat`, `file.write`, `http.request`, `log`, `mqtt.publish`, `sql.delete`, `sql.execute`, `sql.insert`, `sql.select`, `sql.update`, `transform`, `web.scrape`.
+`agent`, `csv.read`, `csv.write`, `delay`, `email.send`, `excel.read`, `excel.write`, `file.delete`, `file.list`, `file.read`, `file.stat`, `file.write`, `http.request`, `log`, `mqtt.publish`, `sql.delete`, `sql.execute`, `sql.insert`, `sql.select`, `sql.update`, `transform`, `web.scrape`.
 
 > **Removed:** the dedicated `condition` plugin is gone — gate downstream
 > nodes with `executeIf` instead. The visual editor reads each plugin's
@@ -69,6 +69,40 @@ The expression is **raw FEEL** — no `${…}` wrapping. Examples:
 - `"if x > 0 then \"positive\" else \"non-positive\""` → string
 
 Output: `{ value: <whatever your expression evaluated to> }`. `primaryOutput: "value"`.
+
+---
+
+## AI
+
+### `agent`
+
+Run a stored LLM agent against an input text. Each agent is a named persona — system prompt + linked `ai.provider` configuration — managed from Home → Agents. Multiple workflow nodes can reference the same agent by title.
+
+```json
+{
+  "action": "agent",
+  "inputs": {
+    "agent":     "Sentiment Analyser",
+    "input":     "${data.reviewText}",
+    "maxTokens": 1024
+  }
+}
+```
+
+Output (fixed wrapper):
+
+```js
+{
+  result:     /* parsed JSON object/array, or null on parse fail */,
+  confidence: /* number 0–1, plucked from result.confidence (also accepts 0–100, normalised); null if absent */,
+  raw:        /* full text response from the model */,
+  usage:      { inputTokens, outputTokens }
+}
+```
+
+`primaryOutput: "result"`. Set up the agent first: Home → Configurations → +New → type **AI provider** (provider, apiKey, model), then Home → Agents → +New (title, prompt, pick the config). The system prompt accepts markdown — the editor has Edit / Split / Preview modes.
+
+See [`plugins/agent.md`](./plugins/agent.md) for prompt patterns, branch-on-confidence examples, and troubleshooting.
 
 ---
 

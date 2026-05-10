@@ -76,6 +76,24 @@ export const TYPES = Object.freeze({
       { name: "password", type: "string", secret: true },
     ],
   },
+  "ai.provider": {
+    label: "AI provider",
+    description:
+      "API credentials for an LLM provider (Anthropic / OpenAI / Groq / etc). " +
+      "Referenced by the `agent` plugin via a stored agent's config name.",
+    fields: [
+      { name: "provider", type: "select", required: true,
+        options: ["anthropic", "openai"],
+        default: "anthropic",
+        description: "Provider family. Drives the request shape (Anthropic Messages vs OpenAI Chat Completions)." },
+      { name: "apiKey",   type: "string", required: true, secret: true,
+        description: "API key. Encrypted at rest." },
+      { name: "model",    type: "string", required: true,
+        description: "Model id (e.g. claude-haiku-4-5-20251001 or gpt-4o-mini)." },
+      { name: "baseUrl",  type: "string",
+        description: "Optional override for the API endpoint. Defaults to the provider's standard URL." },
+    ],
+  },
   generic: {
     label: "Generic (key/value)",
     description: "Freeform key/value bag — for things that don't fit a specific type. " +

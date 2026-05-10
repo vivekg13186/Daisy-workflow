@@ -49,6 +49,15 @@
                         @delete="onDeleteConfig"
                         @delete-selected="onDeleteSelectedConfigs"
                     />
+                    <AppTable
+                        :rows="agent_rows"
+                        :columns="agent_columns"
+                        title="Agents"
+                        @add="onAddAgent"
+                        @edit="onEditAgent"
+                        @delete="onDeleteAgent"
+                        @delete-selected="onDeleteSelectedAgents"
+                    />
                 </div>
             </q-page>
 
@@ -60,7 +69,7 @@
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useQuasar } from "quasar";
-import { Graphs, Triggers, Configs } from "../api/client";
+import { Graphs, Triggers, Configs, Agents } from "../api/client";
 import AppTable from "../components/AppTable.vue";
 
 const router = useRouter();
@@ -69,6 +78,7 @@ const $q = useQuasar();
 const wf_rows = ref([]);
 const trigger_rows = ref([]);
 const config_rows = ref([]);
+const agent_rows = ref([]);
 
 const wf_columns = [
     { name: "action", label: "", style: "width:2px" },
@@ -109,6 +119,18 @@ const config_columns = [
     { name: "actions", label: "", align: "right", style: "width: 80px;" },
 ];
 
+const agent_columns = [
+    { name: "action", label: "", style: "width:2px" },
+    { name: "title",       label: "Title",       field: "title",       align: "left", sortable: true },
+    { name: "config_name", label: "AI provider", field: "config_name", align: "left", sortable: true, style: "width: 200px;" },
+    { name: "description", label: "Description", field: "description", align: "left" },
+    {
+        name: "updated", label: "Updated", field: "updated_at", align: "left", sortable: true,
+        format: v => v ? new Date(v).toLocaleString() : "",
+    },
+    { name: "actions", label: "", align: "right", style: "width: 80px;" },
+];
+
 function graphName(graphId) {
     const g = wf_rows.value.find(x => x.id === graphId);
     return g ? g.name : (graphId ? graphId.slice(0, 8) + "…" : "");
@@ -120,14 +142,16 @@ function triggerStatusLabel(row) {
 }
 
 async function reload() {
-    const [graphs, triggers, configs] = await Promise.all([
+    const [graphs, triggers, configs, agents] = await Promise.all([
         Graphs.list().catch(() => []),
         Triggers.list().catch(() => []),
         Configs.list().catch(() => []),
+        Agents.list().catch(() => []),
     ]);
     wf_rows.value      = graphs;
     trigger_rows.value = triggers;
     config_rows.value  = configs;
+    agent_rows.value   = agents;
 }
 onMounted(reload);
 
@@ -229,6 +253,37 @@ async function onDeleteSelectedConfigs(rows) {
     notify(failed
         ? `Deleted ${rows.length - failed} of ${rows.length} (${failed} failed)`
         : `Deleted ${rows.length} configuration(s)`,
+        failed ? "warning" : "positive");
+    await reload();
+}
+
+// ----- agent actions → AgentDesigner -----
+function onAddAgent() {
+    router.push({ path: "/agentDesigner/new" });
+}
+function onEditAgent(row) {
+    router.push({ path: `/agentDesigner/${row.id}` });
+}
+async function onDeleteAgent(row) {
+    if (!await confirm(`Delete agent "${row.title}"? Any plugin nodes referencing it will start failing.`)) return;
+    try {
+        await Agents.remove(row.id);
+        notify(`Deleted "${row.title}"`, "positive");
+        await reload();
+    } catch (e) {
+        notify(`Delete failed: ${errMsg(e)}`, "negative");
+    }
+}
+async function onDeleteSelectedAgents(rows) {
+    if (!rows?.length) return;
+    if (!await confirm(`Delete ${rows.length} agent(s)?`)) return;
+    let failed = 0;
+    for (const r of rows) {
+        try { await Agents.remove(r.id); } catch { failed++; }
+    }
+    notify(failed
+        ? `Deleted ${rows.length - failed} of ${rows.length} (${failed} failed)`
+        : `Deleted ${rows.length} agent(s)`,
         failed ? "warning" : "positive");
     await reload();
 }

@@ -82,6 +82,14 @@ export const Configs = {
   remove: (id) => api.delete(`/configs/${id}`).then(r => r.data),
 };
 
+export const Agents = {
+  list:   () => api.get("/agents").then(r => r.data),
+  get:    (id) => api.get(`/agents/${id}`).then(r => r.data),
+  create: (payload) => api.post("/agents", payload).then(r => r.data),
+  update: (id, patch) => api.put(`/agents/${id}`, patch).then(r => r.data),
+  remove: (id) => api.delete(`/agents/${id}`).then(r => r.data),
+};
+
 export const Triggers = {
   list:   (graphId) => api.get("/triggers", graphId ? { params: { graphId } } : undefined).then(r => r.data),
   types:  () => api.get("/triggers/types").then(r => r.data),

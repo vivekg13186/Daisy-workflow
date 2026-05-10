@@ -131,6 +131,8 @@ The frontend Dockerfile is a two-stage build: Node 20 to compile, nginx 1.27 to 
 - **AI button doesn't appear in the UI** — the frontend hides it when `GET /ai/status` reports `configured: false`. Visit `http://localhost:3000/ai/status` to see what the backend received (it shows a masked key preview and any warnings).
 - **401 from Anthropic / OpenAI despite a set key** — see the warnings field of `/ai/status`. Common causes: trailing whitespace in `.env`, wrong key prefix (`sk-` vs `sk-ant-`), copy-paste truncation.
 - **`email.send` / `mqtt.publish` / `sql.*` errors with `config "<name>" not found`** — the named configuration doesn't exist yet, or has a different name than what you typed in the node. Open Home → Configurations and verify the row.
+- **`agent` plugin: `no agent titled "<title>"`** — the `agent` input is case-sensitive and matches the agent's **Title** verbatim. Open Home → Agents to check.
+- **`agent` plugin: `config "<name>" has no apiKey set`** — the linked `ai.provider` configuration is incomplete. Open Home → Configurations and fill in the required fields.
 - **File plugins refuse my path** — `FILE_ROOT` is set; the path tries to escape. Either keep paths inside the root or unset `FILE_ROOT` for unrestricted access (only recommended for local dev).
 - **Graph view shows nodes as "pending" forever** — open Dev Tools → Network and confirm `GET /executions/:id` returns a `context.nodes` object. If it doesn't, the worker hasn't finished yet — wait or click the refresh button.
 - **CONFIG_SECRET dev-fallback warning at startup** — production deployments must set `CONFIG_SECRET` to a long random string. Without it, secrets are encrypted with a built-in fallback key, which is portable but obviously not secret.

@@ -17,11 +17,24 @@
       </q-btn>
     </template>
 
-    <!-- Name Column -->
+    <!-- Name column — primary clickable label that opens the row editor.
+         Triggers / Workflows / Configurations use `name`; Agents use
+         `title`. Both render the same way. Tables that need a different
+         primary field can override via the standard `body-cell-<colName>`
+         slot from outside (Quasar passes named slots through). -->
     <template v-slot:body-cell-name="props">
       <q-td :props="props">
         <span class="text-primary cursor-pointer" @click="onEdit(props.row)">
           {{ props.row.name }}
+        </span>
+      </q-td>
+    </template>
+
+    <!-- Title column — same link affordance for tables keyed on `title`. -->
+    <template v-slot:body-cell-title="props">
+      <q-td :props="props">
+        <span class="text-primary cursor-pointer" @click="onEdit(props.row)">
+          {{ props.row.title }}
         </span>
       </q-td>
     </template>

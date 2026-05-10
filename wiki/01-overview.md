@@ -57,7 +57,9 @@ DAG Engine is a workflow runner. You design a Directed Acyclic Graph of tasks vi
 
 **Engine** — pure-JS DAG executor: topological layered scheduler, parallel `Promise.all` per layer, per-node retries with delay, `executeIf` skipping with cascade-to-descendants, `batchOver` fan-out, `onError: continue|terminate`. Expressions are FEEL via [`feelin`](https://github.com/nikku/feelin); `${path}` is the placeholder syntax that wraps a FEEL expression.
 
-**Configurations** — encrypted-at-rest typed config store. Secret fields go through AES-256-GCM (keyed by `CONFIG_SECRET`); the engine pre-loads decrypted configs into `ctx.config.<name>.<field>` for use in expressions, and projects them as `ctx.env.CONFIG_<NAME>_<FIELD>` for script-style access. Plugins like `email.send`, `mqtt.publish`, and the `sql.*` family take a config name and look the rest up themselves.
+**Configurations** — encrypted-at-rest typed config store. Secret fields go through AES-256-GCM (keyed by `CONFIG_SECRET`); the engine pre-loads decrypted configs into `ctx.config.<name>.<field>` for use in expressions, and projects them as `ctx.env.CONFIG_<NAME>_<FIELD>` for script-style access. Plugins like `email.send`, `mqtt.publish`, and the `sql.*` family take a config name and look the rest up themselves. The `ai.provider` config type holds LLM credentials referenced by **agents**.
+
+**Agents** — named LLM personas. Each agent pairs a system prompt (markdown supported) with a stored `ai.provider` configuration. The `agent` plugin runs an agent by title, sending the workflow's input text to the configured provider and parsing the response as JSON.
 
 **Triggers** — event sources that enqueue a workflow run. Built-ins: `schedule` (cron / interval), `webhook` (HTTP endpoint), `email` (IMAP IDLE), `mqtt` (broker subscribe). Each trigger references a configuration by name where applicable.
 
@@ -72,6 +74,7 @@ DAG Engine is a workflow runner. You design a Directed Acyclic Graph of tasks vi
 | `executions` | One row per run: status, timestamps, original `inputs`, final redacted `context`. |
 | `configs` | Typed, named configurations with secret fields encrypted at rest. |
 | `triggers` | Event sources with their per-driver config. Enabled/disabled live. |
+| `agents` | Named LLM personas (title + prompt + `ai.provider` config name) used by the `agent` plugin. |
 
 Per-node lifecycle history is appended to `backend/logs/node-events.log` as JSON lines (one event per line, each tagged with `executionId` / `graphId`). The execution row's `context.nodes` always carries the post-run summary the UI needs.
 
