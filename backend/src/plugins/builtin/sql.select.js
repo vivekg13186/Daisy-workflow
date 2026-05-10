@@ -1,50 +1,40 @@
-import { runQuery, quoteIdent, buildWhere, safeOrderBy } from "../sql/util.js";
+// sql.select — run a parameterised SELECT against a stored database config.
+//
+// Inputs:
+//   config: name of a stored `database` configuration (built from the
+//           Home page → Configurations).
+//   sql:    the SQL text. Use $1, $2, … for placeholders.
+//   params: optional ${var} reference to an array supplying the values
+//           for those placeholders.
+
+import {
+  resolveConfigConnString,
+  runQuery,
+  sqlInputSchema,
+  sqlOutputSchema,
+  normalizeParams,
+} from "../sql/util.js";
 
 export default {
   name: "sql.select",
-  description: "Run a SELECT against a Postgres-compatible DB. Either provide raw `query` + `params`, or use the structured form (`table` + optional `columns` + `where` + `orderBy` + `limit` + `offset`).",
-  inputSchema: {
-    type: "object",
-    properties: {
-      connectionString: { type: "string" },
-      query:   { type: "string" },
-      params:  { type: "array" },
-      table:   { type: "string" },
-      columns: { type: "array", items: { type: "string" } },
-      where:   { type: "object", additionalProperties: true },
-      orderBy: { type: "string" },
-      limit:   { type: "integer", minimum: 1, maximum: 100000 },
-      offset:  { type: "integer", minimum: 0 },
-    },
-  },
+  description:
+    "Run a parameterised SELECT against a stored database configuration. " +
+    "The `config` input names the configuration; `sql` is the query text " +
+    "with $1/$2/… placeholders; `params` resolves to an array of values.",
+
+  inputSchema: sqlInputSchema({
+    sqlPlaceholder: "SELECT * FROM users WHERE id = $1",
+    sqlDescription: "SELECT statement. Use $1, $2, … for parameter placeholders.",
+  }),
+
   // What ctx[outputVar] receives when the node-level outputVar is set.
   primaryOutput: "rows",
 
-  outputSchema: {
-    type: "object",
-    required: ["rows", "rowCount"],
-    properties: {
-      rows:     { type: "array" },
-      rowCount: { type: "integer" },
-    },
-  },
-  async execute(input) {
-    if (input.query) {
-      return runQuery(input.connectionString, input.query, input.params || []);
-    }
-    if (!input.table) {
-      throw new Error("sql.select requires either `query` or `table`");
-    }
-    const cols = (input.columns && input.columns.length)
-      ? input.columns.map(quoteIdent).join(", ")
-      : "*";
-    let sql = `SELECT ${cols} FROM ${quoteIdent(input.table)}`;
-    const { sql: whereSql, params } = buildWhere(input.where);
-    sql += whereSql;
-    const ord = safeOrderBy(input.orderBy);
-    if (ord) sql += ` ORDER BY ${ord}`;
-    if (input.limit  != null) sql += ` LIMIT ${parseInt(input.limit, 10)}`;
-    if (input.offset != null) sql += ` OFFSET ${parseInt(input.offset, 10)}`;
-    return runQuery(input.connectionString, sql, params);
+  outputSchema: sqlOutputSchema,
+
+  async execute(input, ctx) {
+    const cs = resolveConfigConnString(ctx, input.config);
+    const params = normalizeParams(input.params);
+    return runQuery(cs, input.sql, params);
   },
 };

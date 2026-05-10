@@ -1,58 +1,39 @@
-import { runQuery, quoteIdent, buildWhere } from "../sql/util.js";
+// sql.update — run a parameterised UPDATE against a stored database config.
+//
+// Inputs:
+//   config: name of a stored `database` configuration (built from the
+//           Home page → Configurations).
+//   sql:    the UPDATE text. Use $1, $2, … for placeholders. Add a
+//           `RETURNING` clause if you need rows back.
+//   params: optional ${var} reference to an array supplying the values.
+
+import {
+  resolveConfigConnString,
+  runQuery,
+  sqlInputSchema,
+  sqlOutputSchema,
+  normalizeParams,
+} from "../sql/util.js";
 
 export default {
   name: "sql.update",
-  description: "UPDATE rows in a table. Provide raw `query` + `params`, or `table` + `set` + (recommended) `where`. Refuses unconditional updates unless `unsafe: true`.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      connectionString: { type: "string" },
-      query:     { type: "string" },
-      params:    { type: "array" },
-      table:     { type: "string" },
-      set:       { type: "object", additionalProperties: true },
-      where:     { type: "object", additionalProperties: true },
-      returning: { type: "array", items: { type: "string" } },
-      unsafe:    { type: "boolean", default: false },
-    },
-  },
-  // What ctx[outputVar] receives when the node-level outputVar is set.
+  description:
+    "Run a parameterised UPDATE against a stored database configuration. " +
+    "Always include a WHERE clause unless you really mean to update every row.",
+
+  inputSchema: sqlInputSchema({
+    sqlPlaceholder: "UPDATE users SET email = $1 WHERE id = $2",
+    sqlDescription:
+      "UPDATE statement. Use $1, $2, … for parameter placeholders; the " +
+      "first values typically populate the SET list, the rest the WHERE.",
+  }),
+
   primaryOutput: "rows",
+  outputSchema:  sqlOutputSchema,
 
-  outputSchema: {
-    type: "object",
-    required: ["rows", "rowCount"],
-    properties: {
-      rows:     { type: "array" },
-      rowCount: { type: "integer" },
-    },
-  },
-  async execute(input) {
-    if (input.query) {
-      return runQuery(input.connectionString, input.query, input.params || []);
-    }
-    if (!input.table || !input.set) {
-      throw new Error("sql.update requires either `query` or `table` + `set`");
-    }
-    const setKeys = Object.keys(input.set);
-    if (setKeys.length === 0) throw new Error("sql.update: empty `set`");
-    if ((!input.where || Object.keys(input.where).length === 0) && !input.unsafe) {
-      throw new Error("sql.update: refusing UPDATE without WHERE (set unsafe:true to override)");
-    }
-
-    const params = [];
-    const setSql = setKeys.map((k) => {
-      params.push(input.set[k]);
-      return `${quoteIdent(k)} = $${params.length}`;
-    }).join(", ");
-
-    let sql = `UPDATE ${quoteIdent(input.table)} SET ${setSql}`;
-    const { sql: whereSql, params: whereParams } = buildWhere(input.where, params.length + 1);
-    sql += whereSql;
-    params.push(...whereParams);
-    if (input.returning && input.returning.length) {
-      sql += ` RETURNING ${input.returning.map(quoteIdent).join(", ")}`;
-    }
-    return runQuery(input.connectionString, sql, params);
+  async execute(input, ctx) {
+    const cs = resolveConfigConnString(ctx, input.config);
+    const params = normalizeParams(input.params);
+    return runQuery(cs, input.sql, params);
   },
 };

@@ -1,48 +1,44 @@
-import { runQuery, quoteIdent } from "../sql/util.js";
+// sql.execute — run any parameterised SQL against a stored database config.
+//
+// The general-purpose escape hatch for SQL that doesn't fit the
+// SELECT/INSERT/UPDATE/DELETE pigeonholes — stored procedures (CALL …),
+// table-returning functions (SELECT * FROM fn(…)), DDL, multi-statement
+// blocks, etc.
+//
+// Inputs:
+//   config: name of a stored `database` configuration (built from the
+//           Home page → Configurations).
+//   sql:    the SQL text. Use $1, $2, … for placeholders.
+//   params: optional ${var} reference to an array supplying the values.
+
+import {
+  resolveConfigConnString,
+  runQuery,
+  sqlInputSchema,
+  sqlOutputSchema,
+  normalizeParams,
+} from "../sql/util.js";
 
 export default {
   name: "sql.execute",
-  description: "Execute a stored procedure (CALL ...), a table-returning function (SELECT * FROM fn(...)), or any raw SQL statement.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      connectionString: { type: "string" },
-      // EITHER raw SQL ...
-      query:     { type: "string" },
-      params:    { type: "array" },
-      // ... OR a stored proc to CALL ...
-      procedure: { type: "string" },
-      // ... OR a function to SELECT from.
-      function:  { type: "string" },
-      args:      { type: "array" },
-    },
-  },
-  // What ctx[outputVar] receives when the node-level outputVar is set.
+  description:
+    "Run any parameterised SQL statement against a stored database " +
+    "configuration — handy for CALL stored_proc(…), SELECT * FROM fn(…), " +
+    "DDL, or anything that doesn't fit the dedicated select/insert/update/" +
+    "delete plugins.",
+
+  inputSchema: sqlInputSchema({
+    sqlPlaceholder: "CALL my_proc($1, $2)",
+    sqlDescription:
+      "Any SQL statement. Use $1, $2, … for parameter placeholders.",
+  }),
+
   primaryOutput: "rows",
+  outputSchema:  sqlOutputSchema,
 
-  outputSchema: {
-    type: "object",
-    required: ["rows", "rowCount"],
-    properties: {
-      rows:     { type: "array" },
-      rowCount: { type: "integer" },
-    },
-  },
-  async execute(input) {
-    if (input.query) {
-      return runQuery(input.connectionString, input.query, input.params || []);
-    }
-    const args = Array.isArray(input.args) ? input.args : [];
-    const placeholders = args.map((_, i) => `$${i + 1}`).join(", ");
-
-    if (input.procedure) {
-      const sql = `CALL ${quoteIdent(input.procedure)}(${placeholders})`;
-      return runQuery(input.connectionString, sql, args);
-    }
-    if (input.function) {
-      const sql = `SELECT * FROM ${quoteIdent(input.function)}(${placeholders})`;
-      return runQuery(input.connectionString, sql, args);
-    }
-    throw new Error("sql.execute requires one of: `query`, `procedure`, or `function`");
+  async execute(input, ctx) {
+    const cs = resolveConfigConnString(ctx, input.config);
+    const params = normalizeParams(input.params);
+    return runQuery(cs, input.sql, params);
   },
 };

@@ -1,48 +1,38 @@
-import { runQuery, quoteIdent, buildWhere } from "../sql/util.js";
+// sql.delete — run a parameterised DELETE against a stored database config.
+//
+// Inputs:
+//   config: name of a stored `database` configuration (built from the
+//           Home page → Configurations).
+//   sql:    the DELETE text. Use $1, $2, … for placeholders. Always
+//           include a WHERE clause unless you really mean to wipe the
+//           table.
+//   params: optional ${var} reference to an array supplying the values.
+
+import {
+  resolveConfigConnString,
+  runQuery,
+  sqlInputSchema,
+  sqlOutputSchema,
+  normalizeParams,
+} from "../sql/util.js";
 
 export default {
   name: "sql.delete",
-  description: "DELETE rows from a table. Provide raw `query` + `params`, or `table` + `where`. Refuses to TRUNCATE-by-accident: an empty `where` requires `unsafe: true`.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      connectionString: { type: "string" },
-      query:     { type: "string" },
-      params:    { type: "array" },
-      table:     { type: "string" },
-      where:     { type: "object", additionalProperties: true },
-      returning: { type: "array", items: { type: "string" } },
-      unsafe:    { type: "boolean", default: false },
-    },
-  },
-  // What ctx[outputVar] receives when the node-level outputVar is set.
+  description:
+    "Run a parameterised DELETE against a stored database configuration. " +
+    "Always include a WHERE clause — there's no safety net here.",
+
+  inputSchema: sqlInputSchema({
+    sqlPlaceholder: "DELETE FROM users WHERE id = $1",
+    sqlDescription: "DELETE statement. Use $1, $2, … for parameter placeholders.",
+  }),
+
   primaryOutput: "rows",
+  outputSchema:  sqlOutputSchema,
 
-  outputSchema: {
-    type: "object",
-    required: ["rows", "rowCount"],
-    properties: {
-      rows:     { type: "array" },
-      rowCount: { type: "integer" },
-    },
-  },
-  async execute(input) {
-    if (input.query) {
-      return runQuery(input.connectionString, input.query, input.params || []);
-    }
-    if (!input.table) {
-      throw new Error("sql.delete requires either `query` or `table`");
-    }
-    if ((!input.where || Object.keys(input.where).length === 0) && !input.unsafe) {
-      throw new Error("sql.delete: refusing DELETE without WHERE (set unsafe:true to override)");
-    }
-
-    let sql = `DELETE FROM ${quoteIdent(input.table)}`;
-    const { sql: whereSql, params } = buildWhere(input.where);
-    sql += whereSql;
-    if (input.returning && input.returning.length) {
-      sql += ` RETURNING ${input.returning.map(quoteIdent).join(", ")}`;
-    }
-    return runQuery(input.connectionString, sql, params);
+  async execute(input, ctx) {
+    const cs = resolveConfigConnString(ctx, input.config);
+    const params = normalizeParams(input.params);
+    return runQuery(cs, input.sql, params);
   },
 };

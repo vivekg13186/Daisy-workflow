@@ -57,7 +57,7 @@
     </div>
 
     <!-- ── Right: properties + per-node toolbar ─────────────────────── -->
-    <div v-if="rightOpen" class="right-pane column no-wrap" style="width: 360px;">
+    <div v-if="rightOpen" class="right-pane column no-wrap" style="width: 450px;">
       <q-toolbar dense class="panel-toolbar">
         <span class="text-caption" style="color: var(--text-muted);">
           {{ selectedNode ? "Node" : "Flow" }} properties
@@ -127,12 +127,15 @@ const { addNodes, addEdges, updateNode, onConnect } = useVueFlow();
 // VueFlow handles keyboard delete (Backspace / Delete) internally and
 // mutates our v-model'd `nodes` / `edges` refs directly. The
 // `useVueFlow().onNodesChange` callback is unreliable in v-model mode,
-// so instead we watch array *lengths* — any time they shrink, we know
-// something was removed (button click, keyboard, drag-delete, programmatic)
-// and we flush the canvas state to the parent model immediately.
-//
-// Length-grow is already handled by the explicit extractAndEmit() calls
-// in onAddPlugin / onConnect, so we only react to shrink here.
+// so instead we watch array *lengths* — any time they change, we know
+// something was added or removed (button click, keyboard, drag-delete,
+// drag-connect, programmatic) and we flush the canvas state to the
+// parent model. We react to BOTH grow and shrink because VueFlow's
+// internal store→v-model sync is deferred one tick (watchPausable in
+// useWatchProps), so a synchronous extractAndEmit() right after
+// addEdges()/addNodes() would otherwise read stale arrays — that was
+// the cause of "edge appears on canvas but doesn't make it into the
+// JSON or save" reports.
 let lastNodeCount = nodes.value.length;
 let lastEdgeCount = edges.value.length;
 watch(() => nodes.value.length, (next) => {
@@ -141,17 +144,21 @@ watch(() => nodes.value.length, (next) => {
     if (selectedNodeId.value && !nodes.value.some(n => n.id === selectedNodeId.value)) {
       selectedNodeId.value = null;
     }
-    extractAndEmit();
   }
   lastNodeCount = next;
+  extractAndEmit();
 });
 watch(() => edges.value.length, (next) => {
-  if (next < lastEdgeCount) extractAndEmit();
   lastEdgeCount = next;
+  extractAndEmit();
 });
 
 // Auto-add edges when the user drags a connection between two handles.
-onConnect((connection) => {
+// VueFlow's `addEdges` only updates its internal store synchronously;
+// the v-model'd `edges.value` is mirrored across one nextTick later, so
+// awaiting that flush before extracting prevents the new edge from
+// dropping out of the emitted model.
+onConnect(async (connection) => {
   // Avoid duplicates.
   const dup = edges.value.find(e => e.source === connection.source && e.target === connection.target);
   if (dup) return;
@@ -160,8 +167,10 @@ onConnect((connection) => {
     source: connection.source,
     target: connection.target,
   }]);
-  // Structural change → emit synchronously so a quick Save right after
-  // wiring a connection never races the 200ms debounce.
+  // Wait for VueFlow's store→v-model sync, then push the change up.
+  // (The length watcher above also catches this, but emitting here
+  // explicitly closes a small race with a click-Save-immediately-after.)
+  await nextTick();
   extractAndEmit();
 });
 
@@ -183,7 +192,12 @@ function onPaneClick() {
 }
 
 // ── Palette → addNodes ──────────────────────────────────────────────────────
-function onAddPlugin(plugin) {
+//
+// `addNodes` (like `addEdges`) only mutates VueFlow's internal store
+// synchronously; the v-model'd `nodes` ref catches up one nextTick later.
+// Awaiting that tick before extractAndEmit ensures the new node is
+// included in the emitted model rather than dropping out as stale state.
+async function onAddPlugin(plugin) {
   const entry = registry.value[plugin.name];
   if (!entry) return;
   const node = entry.defaultNode();
@@ -197,8 +211,7 @@ function onAddPlugin(plugin) {
   addNodes([node]);
   selectedNodeId.value = node.id;
   rightOpen.value = true;
-  // Structural change — flush immediately so a quick Save right after
-  // dropping a node doesn't race the debounce window.
+  await nextTick();
   extractAndEmit();
 }
 

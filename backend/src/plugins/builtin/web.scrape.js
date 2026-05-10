@@ -27,18 +27,25 @@ export default {
   inputSchema: {
     type: "object",
     required: ["url", "queries"],
+    // Keep this list scrape-shaped (URL + selectors first), not http-shaped.
+    // method/body are intentionally NOT declared here — scrape is GET in
+    // practice; the executor still honours them when set in JSON for
+    // backward compatibility with older flows.
     properties: {
-      url:       { type: "string", format: "uri" },
-      method:    { type: "string", enum: ["GET", "POST"], default: "GET" },
-      headers:   { type: "object", additionalProperties: { type: "string" } },
-      body:      {},
-      timeoutMs: { type: "integer", minimum: 1, maximum: 60000, default: 15000 },
-      // Used as the document baseURI so relative href/src resolve correctly.
-      baseUrl:   { type: "string", format: "uri" },
+      url: {
+        type: "string",
+        format: "uri",
+        title: "URL",
+        description: "Page to fetch and parse.",
+      },
 
       queries: {
         type: "array",
         minItems: 1,
+        title: "Selectors",
+        description:
+          "One row per value to extract. Each row pairs a `name` (used as the " +
+          "key in the results object) with a CSS or XPath selector.",
         items: {
           type: "object",
           required: ["name", "selector"],
@@ -57,6 +64,30 @@ export default {
             all:      { type: "boolean", default: false },
           },
         },
+      },
+
+      // ---- Power-user knobs below ----------------------------------------
+      // Headers are useful for cookies / auth on protected pages. Edited as
+      // a JSON object via the schema-driven property panel.
+      headers: {
+        type: "object",
+        title: "Request headers",
+        description: "Optional headers (e.g. Cookie, Authorization, User-Agent).",
+        additionalProperties: { type: "string" },
+      },
+      timeoutMs: {
+        type: "integer",
+        title: "Timeout (ms)",
+        minimum: 1, maximum: 60000, default: 15000,
+        description: "Abort the fetch after this many milliseconds.",
+      },
+      baseUrl: {
+        type: "string",
+        format: "uri",
+        title: "Base URL (override)",
+        description:
+          "Override the document baseURI used to resolve relative href/src " +
+          "values. Defaults to the page URL itself.",
       },
     },
   },

@@ -9,7 +9,9 @@
     "start": "node src/server.js",
     "worker": "node src/worker.js",
     "migrate": "node src/db/migrate.js",
-    "test": "node --test test"
+    "test": "node --test --experimental-test-module-mocks test",
+    "test:mqtt": "node --test --experimental-test-module-mocks test/mqtt.util.test.js test/mqtt.publish.test.js test/mqtt.trigger.test.js",
+    "test:coverage": "node --test --test-concurrency=1 --experimental-test-module-mocks --experimental-test-coverage --test-coverage-include='src/plugins/mqtt/**' --test-coverage-include='src/plugins/builtin/mqtt.publish.js' --test-coverage-include='src/triggers/builtin/mqtt.js' test/mqtt.util.test.js test/mqtt.publish.test.js test/mqtt.trigger.test.js"
   },
   "dependencies": {
     "ajv": "^8.17.1",
