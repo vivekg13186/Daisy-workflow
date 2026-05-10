@@ -1,6 +1,6 @@
 <template>
   <q-table v-model:selected="selected" :rows="filteredRows" :columns="columns" :title="title" row-key="id" flat dense
-    bordered selection="multiple">
+    bordered :selection="readOnly ? 'none' : 'multiple'">
     <template v-slot:top-right>
       <q-input v-model="filter" borderless dense debounce="300" placeholder="Search" class="q-mr-sm">
         <template v-slot:append>
@@ -8,32 +8,47 @@
         </template>
       </q-input>
 
-      <q-btn icon="add" flat dense @click="onAdd" size="sm">
-        <q-tooltip>Add new item</q-tooltip>
-      </q-btn>
+      <!-- Mutating buttons disappear entirely in read-only mode (editor
+           view, Instances, Running triggers). Quasar's q-table still
+           shows the title + search even without these. -->
+      <template v-if="!readOnly">
+        <q-btn icon="add" flat dense @click="onAdd" size="sm">
+          <q-tooltip>Add new item</q-tooltip>
+        </q-btn>
 
-      <q-btn size="sm" icon="delete" flat dense :disable="selected.length === 0" @click="onDeleteSelected">
-        <q-tooltip>Delete selected</q-tooltip>
-      </q-btn>
+        <q-btn size="sm" icon="delete" flat dense :disable="selected.length === 0" @click="onDeleteSelected">
+          <q-tooltip>Delete selected</q-tooltip>
+        </q-btn>
+      </template>
     </template>
 
     <!-- Name column — primary clickable label that opens the row editor.
-         Triggers / Workflows / Configurations use `name`; Agents use
-         `title`. Both render the same way. Tables that need a different
-         primary field can override via the standard `body-cell-<colName>`
-         slot from outside (Quasar passes named slots through). -->
+         Triggers / Workflows / Configurations use a "name" column;
+         Agents use "title"; Executions reuse "name" with the field
+         function pulling from row.graph_name. Both render the same
+         way. We bind to `props.value` (the column's resolved value)
+         instead of `props.row.name` so any table can declare a
+         column named "name" with whatever underlying field it likes.
+         When `clickable=false` the cell renders as plain text so
+         view-only tables don't dangle a click affordance. -->
     <template v-slot:body-cell-name="props">
       <q-td :props="props">
-        <span class="text-primary cursor-pointer" @click="onEdit(props.row)">
-          {{ props.row.name }}
+        <span
+          v-if="clickable"
+          class="text-primary cursor-pointer"
+          @click="onEdit(props.row)"
+        >
+          {{ props.value }}
         </span>
+        <span v-else>{{ props.value }}</span>
         <q-btn
+          v-if="props.value"
           flat dense round size="xs"
           icon="content_copy"
           class="cell-id-copy"
-          @click.stop="onCopyId(props.row.name)"
+          @click.stop="onCopyId(props.value)"
         >
-          <q-tooltip>Copy name</q-tooltip>
+          <q-tooltip>Copy</q-tooltip>
         </q-btn>
       </q-td>
     </template>
@@ -41,9 +56,14 @@
     <!-- Title column — same link affordance for tables keyed on `title`. -->
     <template v-slot:body-cell-title="props">
       <q-td :props="props">
-        <span class="text-primary cursor-pointer" @click="onEdit(props.row)">
-          {{ props.row.title }}
+        <span
+          v-if="clickable"
+          class="text-primary cursor-pointer"
+          @click="onEdit(props.row)"
+        >
+          {{ props.value }}
         </span>
+        <span v-else>{{ props.value }}</span>
       </q-td>
     </template>
 
@@ -69,10 +89,10 @@
     </template>
    
 
-    <!-- Actions Column -->
+    <!-- Actions Column — hidden in read-only mode. -->
     <template v-slot:body-cell-actions="props">
       <q-td :props="props" auto-width>
-        <q-btn icon="more_vert" flat size="sm" dense>
+        <q-btn v-if="!readOnly" icon="more_vert" flat size="sm" dense>
           <q-tooltip>Row actions</q-tooltip>
           <q-menu>
             <q-list dense style="min-width: 200px">
@@ -114,6 +134,22 @@ const props = defineProps({
   title: {
     type: String,
     default: "",
+  },
+  // When true: no Add button, no Delete-selected button, no per-row
+  // actions menu, and row-selection checkboxes are removed. The
+  // primary name/title cell still emits 'edit' on click — turn that
+  // off via `clickable=false`. Used for the editor's Configurations
+  // view-only table, Instances, and Running triggers.
+  readOnly: {
+    type: Boolean,
+    default: false,
+  },
+  // Whether the name/title cell renders as a clickable link. Default
+  // true matches the legacy behaviour; set to false for tables that
+  // shouldn't drill into an editor (e.g. editor viewing Configurations).
+  clickable: {
+    type: Boolean,
+    default: true,
   },
 });
 

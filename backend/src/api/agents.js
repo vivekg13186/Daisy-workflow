@@ -34,12 +34,14 @@ router.get("/", requireRole("admin", "editor", "viewer"), async (req, res, next)
   try {
     const { rows } = await pool.query(
       `SELECT a.id, a.title, a.prompt, a.config_name, a.description,
-              a.created_at, a.updated_at,
-              c.type AS config_type
+              a.created_at, a.updated_at, a.updated_by,
+              c.type AS config_type,
+              COALESCE(u.display_name, u.email) AS updated_by_email
          FROM agents a
          LEFT JOIN configs c
                 ON c.name = a.config_name
                AND c.workspace_id = a.workspace_id
+         LEFT JOIN users u ON u.id = a.updated_by
         WHERE a.workspace_id = $1
         ORDER BY a.title`,
       [req.user.workspaceId],
@@ -51,7 +53,10 @@ router.get("/", requireRole("admin", "editor", "viewer"), async (req, res, next)
 router.get("/:id", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      "SELECT * FROM agents WHERE id=$1 AND workspace_id=$2",
+      `SELECT a.*, COALESCE(u.display_name, u.email) AS updated_by_email
+         FROM agents a
+         LEFT JOIN users u ON u.id = a.updated_by
+        WHERE a.id=$1 AND a.workspace_id=$2`,
       [req.params.id, req.user.workspaceId],
     );
     if (rows.length === 0) throw new NotFoundError("agent");
@@ -68,9 +73,9 @@ router.post("/", requireRole("admin", "editor"), async (req, res, next) => {
     const id = uuid();
     try {
       await pool.query(
-        `INSERT INTO agents (id, title, prompt, config_name, description, workspace_id)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [id, title.trim(), prompt, config_name, description || null, req.user.workspaceId],
+        `INSERT INTO agents (id, title, prompt, config_name, description, workspace_id, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, title.trim(), prompt, config_name, description || null, req.user.workspaceId, req.user.id],
       );
     } catch (e) {
       if (e.code === "23505") {
@@ -94,6 +99,9 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res, next) => {
     if (config_name !== undefined) { params.push(config_name);  sets.push(`config_name = $${params.length}`); }
     if (description !== undefined) { params.push(description || null); sets.push(`description = $${params.length}`); }
     if (sets.length === 0) return res.json({ id: req.params.id, updated: false });
+    // Stamp the modifier on every UPDATE.
+    params.push(req.user.id);
+    sets.push(`updated_by = $${params.length}`);
     params.push(req.params.id);
     const idIdx = params.length;
     params.push(req.user.workspaceId);

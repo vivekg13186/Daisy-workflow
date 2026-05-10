@@ -1,0 +1,250 @@
+<!--
+  LEGACY HomePage — preserved as a backup of the pre-VS-Code-rail
+  layout. Not referenced by the router. Delete once the new HomePage
+  has been in production long enough to be trusted.
+-->
+<template>
+    <q-layout view="hHh lpR fFf">
+
+        <q-header class="app-header">
+            <q-toolbar class="app-toolbar">
+                <q-img src="/dag_logo_trans.png" style="width: 28px; height: 28px;" class="q-mr-sm" />
+                <q-toolbar-title>
+                    DAISY Workflow Engine
+                </q-toolbar-title>
+                <q-space />
+                <q-btn
+                    flat round dense
+                    icon="monitor"
+                    class="btn-icon"
+                    @click="onOpenInspector"
+                >
+                    <q-tooltip>Inspector — live executions and trigger controls</q-tooltip>
+                </q-btn>
+            </q-toolbar>
+        </q-header>
+
+        <q-page-container>
+            <q-page class="app-page">
+                <div class="q-gutter-md">
+                    <AppTable
+                        :rows="wf_rows"
+                        :columns="wf_columns"
+                        title="Workflows"
+                        @add="onAddWorkflow"
+                        @edit="onEditWorkflow"
+                        @delete="onDeleteWorkflow"
+                        @delete-selected="onDeleteSelectedWorkflows"
+                    />
+                    <AppTable
+                        :rows="trigger_rows"
+                        :columns="trigger_columns"
+                        title="Triggers"
+                        @add="onAddTrigger"
+                        @edit="onEditTrigger"
+                        @delete="onDeleteTrigger"
+                        @delete-selected="onDeleteSelectedTriggers"
+                    />
+                    <AppTable
+                        :rows="config_rows"
+                        :columns="config_columns"
+                        title="Configurations"
+                        @add="onAddConfig"
+                        @edit="onEditConfig"
+                        @delete="onDeleteConfig"
+                        @delete-selected="onDeleteSelectedConfigs"
+                    />
+                    <AppTable
+                        :rows="agent_rows"
+                        :columns="agent_columns"
+                        title="Agents"
+                        @add="onAddAgent"
+                        @edit="onEditAgent"
+                        @delete="onDeleteAgent"
+                        @delete-selected="onDeleteSelectedAgents"
+                    />
+                </div>
+            </q-page>
+
+        </q-page-container>
+
+    </q-layout>
+</template>
+<script setup>
+import { ref, onMounted } from "vue";
+import { useRouter } from "vue-router";
+import { useQuasar } from "quasar";
+import { Graphs, Triggers, Configs, Agents } from "../api/client";
+import AppTable from "../components/AppTable.vue";
+
+const router = useRouter();
+const $q = useQuasar();
+
+const wf_rows = ref([]);
+const trigger_rows = ref([]);
+const config_rows = ref([]);
+const agent_rows = ref([]);
+
+const wf_columns = [
+    { name: "action", label: "", style: "width:2px" },
+    { name: "name", label: "Name", field: "name", align: "left", sortable: true },
+    { name: "id", label: "ID", field: "id", align: "left", style: "width: 300px" },
+    {
+        name: "updated", label: "Updated", field: "updated_at", align: "left", sortable: true,
+        format: v => v ? new Date(v).toLocaleString() : "",
+    },
+    { name: "actions", label: "", align: "right", style: "width: 80px;" },
+];
+
+const trigger_columns = [
+    { name: "action", label: "", style: "width:2px" },
+    {
+        name: "status", label: "Status", field: row => triggerStatusLabel(row),
+        align: "left", style: "width: 70px;",
+    },
+    { name: "name", label: "Name", field: "name", align: "left", sortable: true },
+    { name: "type", label: "Type", field: "type", align: "left", sortable: true, style: "width: 70px;" },
+    { name: "graph", label: "Flow", field: row => graphName(row.graph_id), align: "left" },
+    { name: "fires", label: "Fires", field: "fire_count", align: "right", style: "width: 60px;" },
+    {
+        name: "lastFired", label: "Last", field: "last_fired_at", align: "left",
+        format: v => v ? new Date(v).toLocaleString() : "—",
+    },
+    { name: "actions", label: "", align: "right", style: "width: 80px;" },
+];
+
+const config_columns = [
+    { name: "action", label: "", style: "width:2px" },
+    { name: "name",   label: "Name",   field: "name", align: "left", sortable: true },
+    { name: "type",   label: "Type",   field: "type", align: "left", sortable: true, style: "width: 130px;" },
+    { name: "description", label: "Description", field: "description", align: "left" },
+    {
+        name: "updated", label: "Updated", field: "updated_at", align: "left", sortable: true,
+        format: v => v ? new Date(v).toLocaleString() : "",
+    },
+    { name: "actions", label: "", align: "right", style: "width: 80px;" },
+];
+
+const agent_columns = [
+    { name: "action", label: "", style: "width:2px" },
+    { name: "title",       label: "Title",       field: "title",       align: "left", sortable: true },
+    { name: "config_name", label: "AI provider", field: "config_name", align: "left", sortable: true, style: "width: 200px;" },
+    { name: "description", label: "Description", field: "description", align: "left" },
+    {
+        name: "updated", label: "Updated", field: "updated_at", align: "left", sortable: true,
+        format: v => v ? new Date(v).toLocaleString() : "",
+    },
+    { name: "actions", label: "", align: "right", style: "width: 80px;" },
+];
+
+function graphName(graphId) {
+    const g = wf_rows.value.find(x => x.id === graphId);
+    return g ? g.name : (graphId ? graphId.slice(0, 8) + "…" : "");
+}
+function triggerStatusLabel(row) {
+    if (!row?.enabled) return "off";
+    if (row?.last_error) return "error";
+    return "running";
+}
+
+async function reload() {
+    const [graphs, triggers, configs, agents] = await Promise.all([
+        Graphs.list().catch(() => []),
+        Triggers.list().catch(() => []),
+        Configs.list().catch(() => []),
+        Agents.list().catch(() => []),
+    ]);
+    wf_rows.value      = graphs;
+    trigger_rows.value = triggers;
+    config_rows.value  = configs;
+    agent_rows.value   = agents;
+}
+onMounted(reload);
+
+function onOpenInspector()          { router.push({ path: "/flowInspector" }); }
+function onAddWorkflow()             { router.push({ path: "/flowDesigner/new" }); }
+function onEditWorkflow(row)         { router.push({ path: `/flowDesigner/${row.id}` }); }
+async function onDeleteWorkflow(row) {
+    if (!await confirm(`Delete workflow "${row.name}"?`)) return;
+    try { await Graphs.remove(row.id); notify(`Deleted "${row.name}"`, "positive"); await reload(); }
+    catch (e) { notify(`Delete failed: ${errMsg(e)}`, "negative"); }
+}
+async function onDeleteSelectedWorkflows(rows) {
+    if (!rows?.length) return;
+    if (!await confirm(`Delete ${rows.length} workflow(s)?`)) return;
+    let failed = 0;
+    for (const r of rows) { try { await Graphs.remove(r.id); } catch { failed++; } }
+    notify(failed ? `Deleted ${rows.length - failed} of ${rows.length} (${failed} failed)`
+                  : `Deleted ${rows.length} workflow(s)`, failed ? "warning" : "positive");
+    await reload();
+}
+
+function onAddTrigger()              { router.push({ path: "/triggerDesigner/new" }); }
+function onEditTrigger(row)          { router.push({ path: `/triggerDesigner/${row.id}` }); }
+async function onDeleteTrigger(row) {
+    if (!await confirm(`Delete trigger "${row.name}"? It will be unsubscribed and removed.`)) return;
+    try { await Triggers.remove(row.id); notify(`Deleted "${row.name}"`, "positive"); await reload(); }
+    catch (e) { notify(`Delete failed: ${errMsg(e)}`, "negative"); }
+}
+async function onDeleteSelectedTriggers(rows) {
+    if (!rows?.length) return;
+    if (!await confirm(`Delete ${rows.length} trigger(s)?`)) return;
+    let failed = 0;
+    for (const r of rows) { try { await Triggers.remove(r.id); } catch { failed++; } }
+    notify(failed ? `Deleted ${rows.length - failed} of ${rows.length} (${failed} failed)`
+                  : `Deleted ${rows.length} trigger(s)`, failed ? "warning" : "positive");
+    await reload();
+}
+
+function onAddConfig()               { router.push({ path: "/configDesigner/new" }); }
+function onEditConfig(row)           { router.push({ path: `/configDesigner/${row.id}` }); }
+async function onDeleteConfig(row) {
+    if (!await confirm(`Delete configuration "${row.name}"?`)) return;
+    try { await Configs.remove(row.id); notify(`Deleted "${row.name}"`, "positive"); await reload(); }
+    catch (e) { notify(`Delete failed: ${errMsg(e)}`, "negative"); }
+}
+async function onDeleteSelectedConfigs(rows) {
+    if (!rows?.length) return;
+    if (!await confirm(`Delete ${rows.length} configuration(s)?`)) return;
+    let failed = 0;
+    for (const r of rows) { try { await Configs.remove(r.id); } catch { failed++; } }
+    notify(failed ? `Deleted ${rows.length - failed} of ${rows.length} (${failed} failed)`
+                  : `Deleted ${rows.length} configuration(s)`, failed ? "warning" : "positive");
+    await reload();
+}
+
+function onAddAgent()                { router.push({ path: "/agentDesigner/new" }); }
+function onEditAgent(row)            { router.push({ path: `/agentDesigner/${row.id}` }); }
+async function onDeleteAgent(row) {
+    if (!await confirm(`Delete agent "${row.title}"?`)) return;
+    try { await Agents.remove(row.id); notify(`Deleted "${row.title}"`, "positive"); await reload(); }
+    catch (e) { notify(`Delete failed: ${errMsg(e)}`, "negative"); }
+}
+async function onDeleteSelectedAgents(rows) {
+    if (!rows?.length) return;
+    if (!await confirm(`Delete ${rows.length} agent(s)?`)) return;
+    let failed = 0;
+    for (const r of rows) { try { await Agents.remove(r.id); } catch { failed++; } }
+    notify(failed ? `Deleted ${rows.length - failed} of ${rows.length} (${failed} failed)`
+                  : `Deleted ${rows.length} agent(s)`, failed ? "warning" : "positive");
+    await reload();
+}
+
+function errMsg(e) { return e?.response?.data?.message || e?.message || "unknown error"; }
+function confirm(message) {
+    return new Promise((resolve) => {
+        $q.dialog({
+            title: "Confirm",
+            message,
+            persistent: true,
+            ok:     { label: "Delete", color: "negative", unelevated: true, "no-caps": true },
+            cancel: { label: "Cancel", flat: true,  "no-caps": true },
+        })
+            .onOk(() => resolve(true))
+            .onDismiss(() => resolve(false));
+    });
+}
+function notify(message, type = "positive") {
+    $q.notify({ type, message, timeout: 1800, position: "bottom" });
+}
+</script>

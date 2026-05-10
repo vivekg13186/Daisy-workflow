@@ -29,12 +29,17 @@ router.get("/types", requireRole("admin", "editor", "viewer"), (_req, res) => {
 router.get("/", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
     const params = [req.user.workspaceId];
-    const where = ["workspace_id = $1"];
-    if (req.query.graphId) { params.push(req.query.graphId); where.push(`graph_id=$${params.length}`); }
+    const where = ["t.workspace_id = $1"];
+    if (req.query.graphId) { params.push(req.query.graphId); where.push(`t.graph_id=$${params.length}`); }
     const { rows } = await pool.query(
-      `SELECT id, name, graph_id, type, config, enabled, last_fired_at, last_error, fire_count, created_at, updated_at
-       FROM triggers WHERE ${where.join(" AND ")}
-       ORDER BY created_at DESC`,
+      `SELECT t.id, t.name, t.graph_id, t.type, t.config, t.enabled,
+              t.last_fired_at, t.last_error, t.fire_count,
+              t.created_at, t.updated_at, t.updated_by,
+              COALESCE(u.display_name, u.email) AS updated_by_email
+         FROM triggers t
+         LEFT JOIN users u ON u.id = t.updated_by
+        WHERE ${where.join(" AND ")}
+        ORDER BY t.created_at DESC`,
       params,
     );
     res.json(rows);
@@ -44,7 +49,10 @@ router.get("/", requireRole("admin", "editor", "viewer"), async (req, res, next)
 router.get("/:id", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      "SELECT * FROM triggers WHERE id=$1 AND workspace_id=$2",
+      `SELECT t.*, COALESCE(u.display_name, u.email) AS updated_by_email
+         FROM triggers t
+         LEFT JOIN users u ON u.id = t.updated_by
+        WHERE t.id=$1 AND t.workspace_id=$2`,
       [req.params.id, req.user.workspaceId],
     );
     if (rows.length === 0) throw new NotFoundError("trigger");
@@ -68,9 +76,9 @@ router.post("/", requireRole("admin", "editor"), async (req, res, next) => {
 
     const id = uuid();
     await pool.query(
-      `INSERT INTO triggers (id, name, graph_id, type, config, enabled, workspace_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [id, name, graphId, type, JSON.stringify(config), Boolean(enabled), req.user.workspaceId],
+      `INSERT INTO triggers (id, name, graph_id, type, config, enabled, workspace_id, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [id, name, graphId, type, JSON.stringify(config), Boolean(enabled), req.user.workspaceId, req.user.id],
     );
     if (enabled) await syncTrigger(id);
     res.status(201).json({ id });
@@ -92,6 +100,9 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res, next) => {
     if (config    !== undefined) { params.push(JSON.stringify(config));    sets.push(`config = $${params.length}::jsonb`); }
     if (enabled   !== undefined) { params.push(Boolean(enabled));          sets.push(`enabled = $${params.length}`); }
     if (sets.length === 0) return res.json({ id: req.params.id, updated: false });
+    // Stamp the modifier on every UPDATE.
+    params.push(req.user.id);
+    sets.push(`updated_by = $${params.length}`);
     params.push(req.params.id);
     const idIdx = params.length;
     params.push(req.user.workspaceId);

@@ -65,10 +65,13 @@ router.get("/types", requireRole("admin", "editor"), (_req, res) => {
 router.get("/", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, name, type, description, data, created_at, updated_at
-       FROM configs
-       WHERE workspace_id = $1
-       ORDER BY name`,
+      `SELECT c.id, c.name, c.type, c.description, c.data,
+              c.created_at, c.updated_at, c.updated_by,
+              COALESCE(u.display_name, u.email) AS updated_by_email
+         FROM configs c
+         LEFT JOIN users u ON u.id = c.updated_by
+        WHERE c.workspace_id = $1
+        ORDER BY c.name`,
       [req.user.workspaceId],
     );
     res.json(rows.map(r => ({
@@ -84,7 +87,10 @@ router.get("/", requireRole("admin", "editor"), async (req, res, next) => {
 router.get("/:id", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      "SELECT * FROM configs WHERE id=$1 AND workspace_id=$2",
+      `SELECT c.*, COALESCE(u.display_name, u.email) AS updated_by_email
+         FROM configs c
+         LEFT JOIN users u ON u.id = c.updated_by
+        WHERE c.id=$1 AND c.workspace_id=$2`,
       [req.params.id, req.user.workspaceId],
     );
     if (rows.length === 0) throw new NotFoundError("config");
@@ -117,9 +123,9 @@ router.post("/", requireRole("admin"), async (req, res, next) => {
     const id = uuid();
     try {
       await pool.query(
-        `INSERT INTO configs (id, name, type, description, data, encryption_version, kek_id, workspace_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [id, name, type, description || "", JSON.stringify(stored), encryption_version, kek_id, req.user.workspaceId],
+        `INSERT INTO configs (id, name, type, description, data, encryption_version, kek_id, workspace_id, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [id, name, type, description || "", JSON.stringify(stored), encryption_version, kek_id, req.user.workspaceId, req.user.id],
       );
     } catch (e) {
       if (e.code === "23505") throw new ValidationError(`config name "${name}" already exists`);
@@ -176,6 +182,10 @@ router.put("/:id", requireRole("admin"), async (req, res, next) => {
       params.push(kek_id);                         sets.push(`kek_id = $${params.length}`);
     }
     if (sets.length === 0) return res.json({ id: req.params.id, updated: false });
+    // Stamp the modifier on every UPDATE — including no-data renames /
+    // description-only edits.
+    params.push(req.user.id);
+    sets.push(`updated_by = $${params.length}`);
     params.push(req.params.id);
     const idIdx = params.length;
     params.push(req.user.workspaceId);
@@ -239,9 +249,10 @@ router.post("/:id/rotate", requireRole("admin"), async (req, res, next) => {
           SET data = $2::jsonb,
               encryption_version = $3,
               kek_id = $4,
-              updated_at = NOW()
+              updated_at = NOW(),
+              updated_by = $6
         WHERE id = $1 AND workspace_id = $5`,
-      [existing.id, JSON.stringify(stored), encryption_version, kek_id, req.user.workspaceId],
+      [existing.id, JSON.stringify(stored), encryption_version, kek_id, req.user.workspaceId, req.user.id],
     );
     res.json({
       id: existing.id,

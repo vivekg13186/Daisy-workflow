@@ -54,11 +54,16 @@ router.use(requireUser);
 
 router.get("/", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
+    // JOIN users so the list response carries who last edited the row.
+    // Editor's email is the simplest fallback when display_name is null.
     const { rows } = await pool.query(`
-      SELECT id, name, created_at, updated_at
-      FROM graphs
-      WHERE deleted_at IS NULL AND workspace_id = $1
-      ORDER BY name
+      SELECT g.id, g.name, g.created_at, g.updated_at,
+             g.updated_by,
+             COALESCE(u.display_name, u.email) AS updated_by_email
+        FROM graphs g
+        LEFT JOIN users u ON u.id = g.updated_by
+       WHERE g.deleted_at IS NULL AND g.workspace_id = $1
+       ORDER BY g.name
     `, [req.user.workspaceId]);
     res.json(rows);
   } catch (e) { next(e); }
@@ -67,7 +72,10 @@ router.get("/", requireRole("admin", "editor", "viewer"), async (req, res, next)
 router.get("/:id", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      "SELECT * FROM graphs WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL",
+      `SELECT g.*, COALESCE(u.display_name, u.email) AS updated_by_email
+         FROM graphs g
+         LEFT JOIN users u ON u.id = g.updated_by
+        WHERE g.id=$1 AND g.workspace_id=$2 AND g.deleted_at IS NULL`,
       [req.params.id, req.user.workspaceId],
     );
     if (rows.length === 0) throw new NotFoundError("graph");
@@ -93,9 +101,9 @@ router.post("/", requireRole("admin", "editor"), async (req, res, next) => {
     const id = uuid();
     try {
       await pool.query(
-        `INSERT INTO graphs (id, name, dsl, parsed, workspace_id)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [id, parsed.name, dsl, JSON.stringify(parsed), req.user.workspaceId],
+        `INSERT INTO graphs (id, name, dsl, parsed, workspace_id, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [id, parsed.name, dsl, JSON.stringify(parsed), req.user.workspaceId, req.user.id],
       );
     } catch (e) {
       // Unique-name conflict — the partial unique index added by 008
@@ -130,9 +138,10 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res, next) => {
       `UPDATE graphs
           SET dsl = $2,
               parsed = $3,
-              updated_at = NOW()
+              updated_at = NOW(),
+              updated_by = $5
         WHERE id = $1 AND workspace_id = $4`,
-      [req.params.id, dsl, JSON.stringify(parsed), req.user.workspaceId],
+      [req.params.id, dsl, JSON.stringify(parsed), req.user.workspaceId, req.user.id],
     );
     res.json({ id: req.params.id, name: parsed.name });
   } catch (e) { next(e); }
@@ -241,9 +250,10 @@ router.post("/:id/archives/:archiveId/restore", requireRole("admin", "editor"), 
         `UPDATE graphs
             SET dsl = $2,
                 parsed = $3,
-                updated_at = NOW()
+                updated_at = NOW(),
+                updated_by = $5
           WHERE id = $1 AND workspace_id = $4`,
-        [req.params.id, arch[0].dsl, arch[0].parsed, req.user.workspaceId],
+        [req.params.id, arch[0].dsl, arch[0].parsed, req.user.workspaceId, req.user.id],
       );
     });
     res.json({ ok: true, id: req.params.id });

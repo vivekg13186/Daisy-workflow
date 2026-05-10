@@ -126,6 +126,9 @@ router.post("/agent/chat", requireRole("admin", "editor"), async (req, res, next
       // create resources across workspace boundaries.
       workspaceId:    req.user.workspaceId,
       role:           req.user.role,
+      // Forwarded into create_trigger so the resulting row carries
+      // the caller as its updated_by for audit.
+      userId:         req.user.id,
     };
 
     const system = buildSystemPrompt({ agentMode: true, ctx });
@@ -420,9 +423,9 @@ async function toolCreateTrigger(input, ctx) {
   }
   const id = uuid();
   await pool.query(
-    `INSERT INTO triggers (id, name, graph_id, type, config, enabled, workspace_id)
-     VALUES ($1,$2,$3,$4,$5,true,$6)`,
-    [id, name, ctx.graphId, type, JSON.stringify(triggerCfg || {}), ctx.workspaceId],
+    `INSERT INTO triggers (id, name, graph_id, type, config, enabled, workspace_id, updated_by)
+     VALUES ($1,$2,$3,$4,$5,true,$6,$7)`,
+    [id, name, ctx.graphId, type, JSON.stringify(triggerCfg || {}), ctx.workspaceId, ctx.userId || null],
   );
   await syncTrigger(id);
   ctx.triggerCreated = { id, name, type };
