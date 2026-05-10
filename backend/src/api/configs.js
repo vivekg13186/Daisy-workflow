@@ -29,9 +29,9 @@ import {
   getType,
   validateAndNormalize,
   encryptSecrets,
+  decryptSecrets,
   maskSecrets,
 } from "../configs/registry.js";
-import { isEncrypted } from "../configs/crypto.js";
 
 const router = Router();
 
@@ -93,14 +93,16 @@ router.post("/", async (req, res, next) => {
     // present (validateAndNormalize for generic returns the data as-is).
     if (TYPES[type].freeform && data?.__secret) normalised.__secret = data.__secret;
 
-    const stored = encryptSecrets(type, normalised);
+    // Async because envelope encryption may go through a remote KMS.
+    const { data: stored, encryption_version, kek_id } =
+      await encryptSecrets(type, normalised);
 
     const id = uuid();
     try {
       await pool.query(
-        `INSERT INTO configs (id, name, type, description, data)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [id, name, type, description || "", JSON.stringify(stored)],
+        `INSERT INTO configs (id, name, type, description, data, encryption_version, kek_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, name, type, description || "", JSON.stringify(stored), encryption_version, kek_id],
       );
     } catch (e) {
       if (e.code === "23505") throw new ValidationError(`config name "${name}" already exists`);
@@ -147,8 +149,11 @@ router.put("/:id", async (req, res, next) => {
           normalised.__secret = incomingSecret;
         }
       }
-      const stored = encryptSecrets(existing.type, normalised);
-      params.push(JSON.stringify(stored)); sets.push(`data = $${params.length}::jsonb`);
+      const { data: stored, encryption_version, kek_id } =
+        await encryptSecrets(existing.type, normalised);
+      params.push(JSON.stringify(stored));         sets.push(`data = $${params.length}::jsonb`);
+      params.push(encryption_version);             sets.push(`encryption_version = $${params.length}`);
+      params.push(kek_id);                         sets.push(`kek_id = $${params.length}`);
     }
     if (sets.length === 0) return res.json({ id: req.params.id, updated: false });
     params.push(req.params.id);
@@ -162,6 +167,62 @@ router.put("/:id", async (req, res, next) => {
       throw e;
     }
     res.json({ id: req.params.id, updated: true });
+  } catch (e) { next(e); }
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Rotate — re-encrypt this row with a fresh DEK.
+//
+// What it does:
+//   1. Decrypts the row's current secret fields (legacy v1 or v2).
+//   2. Calls KMS.GenerateDataKey for a brand-new DEK.
+//   3. Re-encrypts every secret field with the new DEK and writes back.
+//
+// Use cases:
+//   • Suspected DEK leak → rotate just that row, no global key change.
+//   • Periodic per-row rotation policy (cron / on-demand from UI).
+//   • Migrate a legacy v1 row to v2 without the user having to
+//     re-enter the secret value.
+//
+// The KEK in KMS is NOT rotated by this call — that's a KMS-side
+// operation and doesn't require touching any ciphertext (KMS handles
+// version mapping internally; on AWS, automatic annual KEK rotation
+// is a one-checkbox setting).
+// ──────────────────────────────────────────────────────────────────────────
+router.post("/:id/rotate", async (req, res, next) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM configs WHERE id=$1", [req.params.id]);
+    if (rows.length === 0) throw new NotFoundError("config");
+    const existing = rows[0];
+
+    // Decrypt to plaintext using whatever scheme the row is currently on.
+    const plaintext = await decryptSecrets(existing.type, existing.data || {});
+    // The freeform __secret marker survives in `existing.data` separately
+    // — re-attach it so encryptSecrets knows which keys to encrypt.
+    if (TYPES[existing.type].freeform && existing.data?.__secret) {
+      plaintext.__secret = existing.data.__secret;
+    }
+
+    // Re-encrypt with a fresh DEK.
+    const { data: stored, encryption_version, kek_id } =
+      await encryptSecrets(existing.type, plaintext);
+
+    await pool.query(
+      `UPDATE configs
+          SET data = $2::jsonb,
+              encryption_version = $3,
+              kek_id = $4,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [existing.id, JSON.stringify(stored), encryption_version, kek_id],
+    );
+    res.json({
+      id: existing.id,
+      rotated: true,
+      from_version: existing.encryption_version,
+      to_version:   encryption_version,
+      kek_id,
+    });
   } catch (e) { next(e); }
 });
 

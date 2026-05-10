@@ -17,6 +17,7 @@ import { log } from "./utils/logger.js";
 import { logNodeEvent } from "./utils/eventLog.js";
 import { loadTriggerBuiltins } from "./triggers/registry.js";
 import { startTriggerManager, stopTriggerManager } from "./triggers/manager.js";
+import { runIfRequested as bootstrapAdmin } from "./cli/createAdmin.js";
 import { loadConfigsMap, buildConfigEnv } from "./configs/loader.js";
 import {
   upsertNodeState,
@@ -30,6 +31,15 @@ await loadTriggerBuiltins();
 // Subscribe to all enabled triggers on worker boot. Errors per-trigger are
 // logged but don't crash the worker.
 startTriggerManager().catch(e => log.error("trigger manager start failed", { error: e.message }));
+
+// One-shot admin bootstrap when BOOTSTRAP_ADMIN_AUTOCREATE=true and the
+// DB has no users yet. No-op otherwise. Logs the outcome so you can
+// see in the journal what credentials seeded the system. Errors here
+// don't crash the worker — the operator can always run create-admin
+// by hand against the same DB.
+bootstrapAdmin()
+  .then((res) => { if (res?.action === "created") log.info("admin bootstrapped", res); })
+  .catch((e)  => log.error("admin bootstrap failed", { error: e.message }));
 
 // Reap any execution rows left in `running` from a previous crash. We
 // don't know what BullMQ has in flight at this exact moment, but a fresh

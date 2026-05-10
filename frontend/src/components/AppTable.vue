@@ -27,6 +27,14 @@
         <span class="text-primary cursor-pointer" @click="onEdit(props.row)">
           {{ props.row.name }}
         </span>
+        <q-btn
+          flat dense round size="xs"
+          icon="content_copy"
+          class="cell-id-copy"
+          @click.stop="onCopyId(props.row.name)"
+        >
+          <q-tooltip>Copy name</q-tooltip>
+        </q-btn>
       </q-td>
     </template>
 
@@ -45,9 +53,9 @@
          Workflows table on Home so the user can grab a graphId for
          workflow.fire / API calls without leaving the page. -->
     <template v-slot:body-cell-id="props">
-      <q-td :props="props" class="cell-id">
-        <code :title="props.row.id" class="cell-id-text">
-          {{ (props.row.id || "").slice(0, 8) }}…
+      <q-td :props="props" class="cell-id" >
+        <code :title="props.row.id" class="cell-id-text" >
+          {{ props.row.id }}
         </code>
         <q-btn
           flat dense round size="xs"
@@ -59,6 +67,7 @@
         </q-btn>
       </q-td>
     </template>
+   
 
     <!-- Actions Column -->
     <template v-slot:body-cell-actions="props">
@@ -154,7 +163,7 @@ async function onCopyId(id) {
   if (!id) return;
   try {
     await navigator.clipboard.writeText(id);
-    $q.notify({ type: "positive", message: "Id copied", timeout: 1200, position: "bottom" });
+    $q.notify({ type: "positive", message: "Copied", timeout: 1200, position: "bottom" });
   } catch (e) {
     $q.notify({ type: "negative", message: `Copy failed: ${e?.message || e}`, position: "bottom" });
   }

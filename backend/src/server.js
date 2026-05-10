@@ -7,10 +7,12 @@ import http from "node:http";
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
+import cookieParser from "cookie-parser";
 import { config } from "./config.js";
 import { log } from "./utils/logger.js";
 import { HttpError } from "./utils/errors.js";
 import { loadBuiltins } from "./plugins/registry.js";
+import authRouter from "./api/auth.js";
 import graphsRouter from "./api/graphs.js";
 import executionsRouter from "./api/executions.js";
 import pluginsRouter from "./api/plugins.js";
@@ -25,11 +27,24 @@ import { attachWss } from "./ws/broadcast.js";
 await loadBuiltins();
 
 const app = express();
-app.use(cors());
+// Cookie-aware CORS: when the frontend lives on a different origin
+// (dev: 5173 vs API on 3000) we have to mirror the Origin header back
+// + send Access-Control-Allow-Credentials:true, otherwise the browser
+// silently drops Set-Cookie on the refresh-cookie response.
+app.use(cors({
+  origin: (origin, cb) => cb(null, origin || true),  // reflect any origin (dev-friendly; tighten in prod)
+  credentials: true,
+}));
 app.use(express.json({ limit: "1mb" }));
+app.use(cookieParser());
 app.use(morgan("tiny"));
 
 app.get("/health", (_req, res) => res.json({ ok: true, env: config.env }));
+
+// Auth lives BEFORE the protected routes — and is itself unprotected
+// at the router level (login/refresh are public; /me uses requireUser
+// inline).
+app.use("/auth", authRouter);
 
 app.use("/graphs", graphsRouter);
 app.use("/executions", executionsRouter);

@@ -86,7 +86,7 @@ const wf_columns = [
     // Id column — exposed so the user can grab the graphId for use in
     // workflow.fire / API calls. Rendered by AppTable's body-cell-id slot
     // as a truncated UUID + copy-to-clipboard button.
-    { name: "id", label: "ID", field: "id", align: "left", style: "width: 160px;" },
+    { name: "id", label: "ID", field: "id", align: "left", style: "width: 300px" },
     {
         name: "updated", label: "Updated", field: "updated_at", align: "left", sortable: true,
         format: v => v ? new Date(v).toLocaleString() : "",

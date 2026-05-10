@@ -18,3 +18,15 @@ export class NotFoundError extends HttpError {
     super(404, "NOT_FOUND", `${resource} not found`);
   }
 }
+
+export class UnauthorizedError extends HttpError {
+  constructor(message = "authentication required") {
+    super(401, "UNAUTHORIZED", message);
+  }
+}
+
+export class ForbiddenError extends HttpError {
+  constructor(message = "forbidden", details) {
+    super(403, "FORBIDDEN", message, details);
+  }
+}

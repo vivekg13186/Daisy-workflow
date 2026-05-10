@@ -29,15 +29,20 @@ export async function loadConfigsMap() {
   const out = {};
   try {
     const { rows } = await pool.query("SELECT name, type, data FROM configs");
-    for (const row of rows) {
+    // Decrypt all rows in parallel — each KMS call is ~10ms, and we
+    // do this once per execution so even at 50 configs the wall-clock
+    // cost is dominated by the slowest single call. With the default
+    // local provider every call is sync-fast.
+    await Promise.all(rows.map(async (row) => {
       try {
-        out[row.name] = decryptSecrets(row.type, row.data || {});
+        const plain = await decryptSecrets(row.type, row.data || {});
         // Drop the editor-only marker — engine consumers shouldn't see it.
-        if (out[row.name].__secret) delete out[row.name].__secret;
+        if (plain.__secret) delete plain.__secret;
+        out[row.name] = plain;
       } catch (e) {
         log.warn("config decrypt failed", { name: row.name, error: e.message });
       }
-    }
+    }));
   } catch (e) {
     // Configs table missing (fresh DB before migrations) → return empty.
     if (e.code === "42P01") return out;

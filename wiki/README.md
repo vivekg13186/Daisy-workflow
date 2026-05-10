@@ -8,6 +8,8 @@ A JSON-defined DAG workflow engine with a drag-and-drop visual editor, pluggable
 2. [Setup](./02-setup.md) — local dev and Docker deployment.
 3. [DSL reference](./03-dsl-reference.md) — full JSON syntax, FEEL expressions, runtime context, and execution semantics.
 4. [Plugin reference](./04-plugins.md) — every built-in action plugin with inputs, outputs, and examples.
+5. [Configs encryption](./05-configs-encryption.md) — KMS envelope encryption, providers, rotation, audit.
+6. [Auth & authorization](./06-auth.md) — local accounts, OIDC, roles, multi-workspace, token rotation.
 
 ## Quick links
 
