@@ -13,6 +13,8 @@ import { log } from "./utils/logger.js";
 import { HttpError } from "./utils/errors.js";
 import { loadBuiltins } from "./plugins/registry.js";
 import authRouter from "./api/auth.js";
+import usersRouter from "./api/users.js";
+import workspacesRouter from "./api/workspaces.js";
 import graphsRouter from "./api/graphs.js";
 import executionsRouter from "./api/executions.js";
 import pluginsRouter from "./api/plugins.js";
@@ -45,6 +47,8 @@ app.get("/health", (_req, res) => res.json({ ok: true, env: config.env }));
 // at the router level (login/refresh are public; /me uses requireUser
 // inline).
 app.use("/auth", authRouter);
+app.use("/users", usersRouter);
+app.use("/workspaces", workspacesRouter);
 
 app.use("/graphs", graphsRouter);
 app.use("/executions", executionsRouter);

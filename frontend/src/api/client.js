@@ -179,6 +179,26 @@ export const Triggers = {
   remove: (id) => api.delete(`/triggers/${id}`).then(r => r.data),
 };
 
+// Admin user management. All endpoints are admin-only on the server.
+export const Users = {
+  list:           ()              => api.get("/users").then(r => r.data),
+  create:         (payload)       => api.post("/users", payload).then(r => r.data),
+  update:         (id, patch)     => api.put(`/users/${id}`, patch).then(r => r.data),
+  setPassword:    (id, password)  => api.post(`/users/${id}/password`, { password }).then(r => r.data),
+  disable:        (id)            => api.delete(`/users/${id}`).then(r => r.data),
+};
+
+// Workspaces — the listing endpoint is open to any signed-in user
+// (returns just the workspaces they belong to). Mutating endpoints
+// are admin-only on the server.
+export const Workspaces = {
+  list:    ()                       => api.get("/workspaces").then(r => r.data),
+  get:     (id)                     => api.get(`/workspaces/${id}`).then(r => r.data),
+  members: (id)                     => api.get(`/workspaces/${id}/members`).then(r => r.data),
+  rename:  (id, name)               => api.put(`/workspaces/${id}`, { name }).then(r => r.data),
+  switch:  (id)                     => api.post(`/workspaces/${id}/switch`).then(r => r.data),
+};
+
 /** Open the live-execution WebSocket. Includes the auth token as a
  *  query-string parameter — browsers can't set Authorization headers
  *  on the WS upgrade, so this is the standard workaround. The backend

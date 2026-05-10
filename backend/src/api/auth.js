@@ -17,6 +17,7 @@
 //   investigate (email + outcome).
 
 import { Router } from "express";
+import crypto from "node:crypto";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { log } from "../utils/logger.js";
@@ -33,6 +34,40 @@ import {
 import { requireUser } from "../middleware/auth.js";
 
 const router = Router();
+
+// ──────────────────────────────────────────────────────────────────────
+// OIDC — lazy imported, only active when OIDC_ISSUER_URL is set.
+//
+// Memory-backed pending-flow store keyed by state. Each entry holds the
+// PKCE verifier + the post-login redirect URL. Single-process scope is
+// fine for self-hosted; switch to Redis if you ever fan out to multiple
+// API instances. Entries auto-expire after 10 minutes — well past any
+// realistic OIDC redirect dance.
+// ──────────────────────────────────────────────────────────────────────
+const oidcPending = new Map();
+const OIDC_TTL_MS = 10 * 60 * 1000;
+
+let _oidcClient = null;
+async function getOidcClient() {
+  if (_oidcClient) return _oidcClient;
+  if (!process.env.OIDC_ISSUER_URL) return null;
+  let openid;
+  try { openid = await import("openid-client"); }
+  catch (e) {
+    log.warn("OIDC requested but openid-client not installed", { error: e.message });
+    return null;
+  }
+  const { Issuer } = openid;
+  const issuer = await Issuer.discover(process.env.OIDC_ISSUER_URL);
+  _oidcClient = new issuer.Client({
+    client_id:     process.env.OIDC_CLIENT_ID,
+    client_secret: process.env.OIDC_CLIENT_SECRET,
+    redirect_uris: [process.env.OIDC_REDIRECT_URI],
+    response_types: ["code"],
+  });
+  log.info("oidc client ready", { issuer: issuer.metadata.issuer });
+  return _oidcClient;
+}
 
 // ────────────────────────────────────────────────────────────────────
 // GET /auth/config — public, no auth.
@@ -164,6 +199,188 @@ router.get("/me", requireUser, async (req, res) => {
     status:      req.user.status,
   });
 });
+
+// ────────────────────────────────────────────────────────────────────
+// OIDC: GET /auth/oidc/login?next=/some/path
+//
+// Kicks off the auth-code-with-PKCE dance:
+//   1. Generate state + a code verifier.
+//   2. Stash the verifier + post-login URL keyed by state.
+//   3. Redirect to the provider's authorization_endpoint with the
+//      state + the code_challenge.
+// On the way back, /auth/oidc/callback consumes the state, exchanges
+// the code, and issues our session cookies.
+// ────────────────────────────────────────────────────────────────────
+router.get("/oidc/login", async (req, res, next) => {
+  try {
+    const client = await getOidcClient();
+    if (!client) {
+      return res.status(404).send("OIDC is not configured on this server.");
+    }
+    const { generators } = await import("openid-client");
+    const state    = generators.state();
+    const verifier = generators.codeVerifier();
+    const challenge = generators.codeChallenge(verifier);
+    oidcPending.set(state, {
+      verifier,
+      next:    typeof req.query.next === "string" && req.query.next.startsWith("/")
+                 ? req.query.next : "/",
+      created: Date.now(),
+    });
+    setTimeout(() => oidcPending.delete(state), OIDC_TTL_MS).unref?.();
+
+    const url = client.authorizationUrl({
+      scope: process.env.OIDC_SCOPE || "openid email profile",
+      state,
+      code_challenge:        challenge,
+      code_challenge_method: "S256",
+    });
+    res.redirect(url);
+  } catch (e) { next(e); }
+});
+
+// ────────────────────────────────────────────────────────────────────
+// OIDC: GET /auth/oidc/callback
+//
+// Exchange the authorization code, verify the id_token, locate or
+// auto-provision the user, and issue Daisy session tokens.
+//
+// Match strategy:
+//   1. Match by oidc_subject — fastest, survives email change.
+//   2. If no match, match by lower(email) — when an admin created the
+//      user locally first, this links the local row to OIDC on first
+//      SSO login.
+//   3. If still no match, auto-provision IF
+//      OIDC_AUTOPROVISION=true; otherwise refuse with a clear error.
+//
+// Newly provisioned OIDC users land in the workspace named by
+// OIDC_DEFAULT_WORKSPACE (or "Default") with role=editor by default.
+// Admin can promote them through the users API afterwards.
+// ────────────────────────────────────────────────────────────────────
+router.get("/oidc/callback", async (req, res, next) => {
+  try {
+    const client = await getOidcClient();
+    if (!client) {
+      return res.status(404).send("OIDC is not configured on this server.");
+    }
+
+    const params  = client.callbackParams(req);
+    const pending = oidcPending.get(params.state || "");
+    if (!pending) {
+      return res.status(400).send("OIDC state expired or unknown — try signing in again.");
+    }
+    oidcPending.delete(params.state);
+
+    const tokenSet = await client.callback(
+      process.env.OIDC_REDIRECT_URI,
+      params,
+      { state: params.state, code_verifier: pending.verifier },
+    );
+    const claims = tokenSet.claims();
+    const sub   = claims.sub;
+    const email = (claims.email || "").toLowerCase();
+    if (!sub) {
+      return res.status(400).send("OIDC response missing `sub` claim.");
+    }
+    if (!email) {
+      return res.status(400).send("OIDC response missing `email` claim. Add the `email` scope.");
+    }
+
+    // 1. Match by oidc_subject.
+    let user = await findOne(
+      `SELECT id, email, role, workspace_id, status
+         FROM users WHERE oidc_subject = $1`,
+      [sub],
+    );
+
+    // 2. Match by email (link local account to OIDC on first SSO).
+    if (!user) {
+      user = await findOne(
+        `SELECT id, email, role, workspace_id, status
+           FROM users WHERE lower(email) = $1`,
+        [email],
+      );
+      if (user) {
+        await pool.query(
+          "UPDATE users SET oidc_subject=$1 WHERE id=$2",
+          [sub, user.id],
+        );
+      }
+    }
+
+    // 3. Auto-provision (opt-in).
+    if (!user) {
+      if (String(process.env.OIDC_AUTOPROVISION || "").toLowerCase() !== "true") {
+        return res.status(403).send(
+          "Your SSO account is not registered. Ask an admin to create your user, " +
+          "or set OIDC_AUTOPROVISION=true to enable self-signup.",
+        );
+      }
+      const wsName = process.env.OIDC_DEFAULT_WORKSPACE || "Default";
+      const ws = await ensureWorkspaceByName(wsName);
+      const id = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO users (id, email, password_hash, role, workspace_id,
+                            status, oidc_subject, display_name)
+         VALUES ($1, lower($2), NULL, 'editor', $3, 'active', $4, $5)`,
+        [id, email, ws.id, sub, claims.name || null],
+      );
+      await pool.query(
+        `INSERT INTO workspace_members (user_id, workspace_id, role)
+         VALUES ($1, $2, 'editor')
+         ON CONFLICT DO NOTHING`,
+        [id, ws.id],
+      );
+      user = { id, email, role: "editor", workspace_id: ws.id, status: "active" };
+      log.info("oidc user provisioned", { userId: id, email });
+    }
+
+    if (user.status !== "active") {
+      return res.status(403).send("Your account is disabled — contact an admin.");
+    }
+
+    await pool.query("UPDATE users SET last_login_at=NOW() WHERE id=$1", [user.id]);
+    log.info("oidc login ok", { userId: user.id, email: user.email });
+
+    // Issue Daisy tokens. We set the refresh cookie and bounce back
+    // to the SPA at /login?oidc=done&next=…; the LoginPage hook calls
+    // auth.tryRefresh() to materialise the access token in memory.
+    const refresh = await issueRefreshToken({
+      userId:    user.id,
+      userAgent: req.headers["user-agent"] || null,
+      ip:        req.ip || null,
+    });
+    res.cookie(REFRESH_COOKIE, refresh.token, refreshCookieOptions());
+
+    const next = pending.next || "/";
+    const search = new URLSearchParams({ oidc: "done", next }).toString();
+    res.redirect(`/login?${search}`);
+  } catch (e) { next(e); }
+});
+
+// ────────────────────────────────────────────────────────────────────
+// helpers
+// ────────────────────────────────────────────────────────────────────
+
+async function findOne(sql, params) {
+  const { rows } = await pool.query(sql, params);
+  return rows[0] || null;
+}
+
+async function ensureWorkspaceByName(name) {
+  const slug = String(name).toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "default";
+  const { rows: existing } = await pool.query(
+    "SELECT id, name FROM workspaces WHERE slug=$1", [slug],
+  );
+  if (existing.length) return existing[0];
+  const id = crypto.randomUUID();
+  await pool.query(
+    "INSERT INTO workspaces (id, name, slug) VALUES ($1, $2, $3)",
+    [id, name, slug],
+  );
+  return { id, name };
+}
 
 // ────────────────────────────────────────────────────────────────────
 // helpers

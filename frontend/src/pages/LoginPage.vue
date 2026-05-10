@@ -103,6 +103,24 @@ const oidcEnabled = ref(false);
 const oidcLabel   = ref("Sign in with SSO");
 
 onMounted(async () => {
+  // If the user just came back from the OIDC dance, the backend has
+  // already set the refresh cookie. We force a refresh probe here to
+  // pull a brand-new access token into memory and bounce home.
+  if (route.query.oidc === "done") {
+    const user = await auth.tryRefresh();
+    if (user) {
+      const next = typeof route.query.next === "string" && route.query.next.startsWith("/")
+        ? route.query.next
+        : "/";
+      router.replace(next);
+      return;
+    }
+    // Refresh failed — fall through and show the sign-in form so the
+    // user can retry. This shouldn't happen in practice (callback just
+    // set the cookie a moment ago), but guard anyway.
+    errorMessage.value = "SSO sign-in didn't complete cleanly. Try again.";
+  }
+
   // If the user is already signed in (browser tab restore, refresh
   // cookie still good), bounce them straight to where they came from.
   if (auth.isAuthenticated) {

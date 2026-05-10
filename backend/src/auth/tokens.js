@@ -184,7 +184,15 @@ export function refreshCookieOptions() {
     httpOnly: true,
     sameSite: "lax",
     secure:   config.env === "production",
-    path:     "/auth",
+    // Path is "/" so the cookie is attached regardless of whether
+    // the frontend talks to the backend directly (path-prefix /auth)
+    // or via the dev Vite proxy (which mounts the API under /api,
+    // so the browser URL is /api/auth/refresh — that path does NOT
+    // start with /auth and a "/auth"-scoped cookie wouldn't be
+    // sent). HttpOnly + SameSite=Lax keep the broader path scope
+    // safe; only POST /auth/refresh and /auth/logout actually read
+    // the cookie server-side.
+    path:     "/",
     maxAge:   REFRESH_TTL_MS,
   };
 }

@@ -19,6 +19,8 @@ import TriggerDesigner from "./pages/TriggerDesigner.vue";
 import ConfigDesigner from "./pages/ConfigDesigner.vue";
 import AgentDesigner  from "./pages/AgentDesigner.vue";
 import LoginPage      from "./pages/LoginPage.vue";
+import UsersPage      from "./pages/UsersPage.vue";
+import WorkspaceSettings from "./pages/WorkspaceSettings.vue";
 import PropertyEditor from "./components/PropertyEditor.vue";
 
 import { auth } from "./stores/auth.js";
@@ -44,6 +46,11 @@ const routes = [
     meta: { roles: ["admin", "editor"] } },
   { path: "/flowInspector",          component: FlowInspector,  name: "flowInspector" },
   { path: "/instanceViewer/:id",     component: InstanceViewer, name: "instanceViewer" },
+
+  // Admin surfaces.
+  { path: "/users",                  component: UsersPage,         name: "users",
+    meta: { roles: ["admin"] } },
+  { path: "/workspace",              component: WorkspaceSettings, name: "workspace" },
 ];
 
 export const router = createRouter({
