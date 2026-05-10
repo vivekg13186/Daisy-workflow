@@ -22,6 +22,7 @@
 
 import { loadAgent, callProvider, tryParseJson, extractConfidence } from "../agent/util.js";
 import { loadHistory, appendHistory } from "../../engine/memoryStore.js";
+import { chargeTokens } from "../../engine/limits.js";
 
 export default {
   name: "agent",
@@ -143,6 +144,20 @@ export default {
       maxTokens: input.maxTokens || 2048,
       onText,
     });
+
+    // Charge the run-wide token budget. Sum of input + output tokens
+    // is accumulated on ctx._tokens by chargeTokens; if the running
+    // total crosses EXECUTION_MAX_TOKENS (or the workflow's
+    // maxTokens override on ctx._parsed) it throws
+    // BudgetExhaustedError — caught by the executor's retry loop /
+    // failure path as a terminal error.
+    //
+    // 0 / null usage (provider didn't return token counts) charges
+    // nothing, which is the safer default — we'd rather under-count
+    // than fail a successful call because of a missing field.
+    const inTok  = Number(usage?.inputTokens)  || 0;
+    const outTok = Number(usage?.outputTokens) || 0;
+    chargeTokens(ctx, ctx?._parsed, inTok + outTok);
 
     // Memory store: if conversationId is set AND storeConversation is true,
     // append both turns. Two rows so a future load reconstructs the

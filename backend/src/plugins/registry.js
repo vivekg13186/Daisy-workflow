@@ -47,14 +47,18 @@ class PluginRegistry {
   /**
    * Invoke a registered plugin.
    *
-   * Plugins can opt into streaming by accepting a third `hooks` arg:
-   *
-   *     async execute(input, ctx, hooks) {
+   *     async execute(input, ctx, hooks, opts) {
    *       hooks?.stream?.text("partial token");
+   *       // opts.signal is an AbortSignal the engine cancels on
+   *       // timeout. Pass it to fetch / pg / etc. for cooperative
+   *       // cancellation. Plugins that ignore it still get killed at
+   *       // the engine layer; honoring it just shortens the leak
+   *       // window when the timer fires.
    *       return { ... };
    *     }
    *
-   * Plugins that ignore `hooks` are unaffected — JS varargs are lenient.
+   * Plugins that don't declare `opts` are unaffected — JS varargs
+   * are lenient.
    *
    * Every invoke is wrapped in a `plugin.<name>` OTel span so external
    * calls (pg, fetch, redis, etc.) made by the plugin nest cleanly under
@@ -62,7 +66,7 @@ class PluginRegistry {
    * adding an llm.generate child span) can read `trace.getActiveSpan()`
    * inside `execute` — the span we open here is the parent.
    */
-  async invoke(name, input, ctx, hooks) {
+  async invoke(name, input, ctx, hooks, opts = {}) {
     return tracer.startActiveSpan(
       `plugin.${name}`,
       { attributes: { "plugin.name": name } },
@@ -73,7 +77,7 @@ class PluginRegistry {
             const errs = p.validateInput.errors.map(e => `${e.instancePath} ${e.message}`).join("; ");
             throw new Error(`Plugin "${name}" input invalid: ${errs}`);
           }
-          const output = await p.execute(input, ctx, hooks);
+          const output = await p.execute(input, ctx, hooks, opts);
           if (p.validateOutput && !p.validateOutput(output)) {
             const errs = p.validateOutput.errors.map(e => `${e.instancePath} ${e.message}`).join("; ");
             throw new Error(`Plugin "${name}" output invalid: ${errs}`);

@@ -3,6 +3,13 @@ import { trace, SpanStatusCode } from "@opentelemetry/api";
 import { buildDag } from "./scheduler.js";
 import { resolve, evalCondition } from "../dsl/expression.js";
 import { registry } from "../plugins/registry.js";
+import {
+  resolveNodeTimeoutMs,
+  resolveMaxRetries,
+  withTimeout,
+  assertIterationCap,
+  NodeTimeoutError,
+} from "./limits.js";
 
 const tracer = trace.getTracer("daisy-dag.engine");
 
@@ -342,14 +349,41 @@ export async function executeDag(parsed, opts = {}) {
     };
 
     const attemptOnce = async (input) => {
-      const maxRetries = node.retry || 0;
-      const delayMs = parseDuration(node.retryDelay) || 0;
+      // resolveMaxRetries clamps to EXECUTION_MAX_RETRIES (default 10).
+      // A workflow that ships `retry: 9999` no longer torches the queue.
+      const maxRetries = resolveMaxRetries(node.retry);
+      const delayMs    = parseDuration(node.retryDelay) || 0;
+      // Per-node timeout overrides workflow-level overrides env default.
+      // null = no wall-clock budget for this node (caller opted out).
+      const nodeTimeoutMs = resolveNodeTimeoutMs(node, parsed);
       let attempt = 0;
       let lastErr;
       while (attempt <= maxRetries) {
         attempt++;
+        // Fresh AbortController per attempt — the timer that fires
+        // NodeTimeoutError also aborts the signal, so plugins that
+        // honor it (fetch, pg query, etc.) can shut down their
+        // sockets immediately instead of leaking until the OS
+        // timeout. Plugins that ignore the signal still get killed
+        // at the engine layer.
+        const ac = new AbortController();
+        let timeoutHandle = null;
+        if (nodeTimeoutMs && Number.isFinite(nodeTimeoutMs) && nodeTimeoutMs > 0) {
+          timeoutHandle = setTimeout(
+            () => ac.abort(new NodeTimeoutError(node.name, nodeTimeoutMs)),
+            nodeTimeoutMs,
+          );
+          if (typeof timeoutHandle.unref === "function") timeoutHandle.unref();
+        }
         try {
-          const out = await registry.invoke(node.action, input, ctx, hooks);
+          // Race the plugin call against the timeout. If the timer
+          // wins, NodeTimeoutError is thrown and the retry loop
+          // decides whether to try again.
+          const out = await withTimeout(
+            registry.invoke(node.action, input, ctx, hooks, { signal: ac.signal }),
+            nodeTimeoutMs,
+            () => new NodeTimeoutError(node.name, nodeTimeoutMs),
+          );
           return { ok: true, output: out, attempts: attempt };
         } catch (e) {
           lastErr = e;
@@ -358,6 +392,10 @@ export async function executeDag(parsed, opts = {}) {
           });
           if (attempt > maxRetries) break;
           if (delayMs) await sleep(delayMs);
+        } finally {
+          // Cancel the abort timer if the call resolved naturally
+          // (timer ref'd or not, no point letting it fire later).
+          if (timeoutHandle) clearTimeout(timeoutHandle);
         }
       }
       return { ok: false, error: lastErr, attempts: attempt };
@@ -366,6 +404,11 @@ export async function executeDag(parsed, opts = {}) {
     let output, attempts;
     try {
       if (batchItems) {
+        // Node-level batch fan-out is subject to the same iteration
+        // cap as executeBatch. A node with batch:true + batchOver
+        // resolving to a 50k-element array fails up-front instead of
+        // mid-run.
+        assertIterationCap(parsed, batchItems.length, `node "${node.name}" batch`);
         const results = await Promise.all(
           batchItems.map(async (item, i) => {
             const itemCtx = { ...ctx, item, index: i };

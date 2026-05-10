@@ -23,6 +23,7 @@
 import { v4 as uuid } from "uuid";
 import { pool } from "../../db/pool.js";
 import { enqueueExecution } from "../../queue/queue.js";
+import { assertIterationCap } from "../../engine/limits.js";
 
 const MAX_DEPTH = 10;
 
@@ -90,6 +91,18 @@ export default {
         `is already in this spawn chain (${ancestors.join(" → ")}).`,
       );
     }
+
+    // Fan-out cap: a single execution can spawn at most
+    // EXECUTION_MAX_ITERATIONS children. Depth cap catches LINEAR
+    // chains; this catches WIDE chains — a node that fires 50k
+    // times in a loop. The counter lives on ctx (underscore-prefixed
+    // so it's redacted from persisted ctx). `null` for parsed means
+    // we honor the env default; workflow-level maxIterations applies
+    // to batch fan-out (which has direct access to parsed) — wiring
+    // it through to plugins would require threading parsed onto ctx
+    // and isn't worth the extra surface for this niche case.
+    ctx._fireCount = (ctx._fireCount || 0) + 1;
+    assertIterationCap(null, ctx._fireCount, "workflow.fire");
 
     // Verify the target workflow exists, isn't soft-deleted, AND lives
     // in the same workspace as the parent. Cross-workspace spawns are

@@ -25,6 +25,11 @@ import {
   reapOrphanedExecutions,
 } from "./engine/nodeStateStore.js";
 import { loadKvForScope } from "./engine/memoryStore.js";
+import {
+  resolveWorkflowTimeoutMs,
+  withTimeout,
+  WorkflowTimeoutError,
+} from "./engine/limits.js";
 
 await loadBuiltins();
 await loadTriggerBuiltins();
@@ -173,6 +178,18 @@ async function processExecutionBody(job, span) {
   // poking back at the queue payload.
   initialData.execution = { id: executionId, graphId, workspaceId };
 
+  // Carry the parsed workflow header onto ctx so plugins can read
+  // workflow-level overrides like maxTokens / maxIterations without
+  // re-reading from the DB. Underscored so the redact() pass below
+  // strips it before persistence.
+  initialData._parsed = {
+    maxTokens:      parsed?.maxTokens,
+    maxIterations:  parsed?.maxIterations,
+  };
+  // Running counters (also redacted out of persisted ctx).
+  initialData._tokens     = 0;
+  initialData._fireCount  = 0;
+
   // Spawn-chain tracking for workflow.fire. Each fire pushes the parent
   // graph_id onto this list before enqueueing the child; the child
   // reads it back here so nested fires keep enforcing the depth + cycle
@@ -205,27 +222,42 @@ async function processExecutionBody(job, span) {
     logNodeEvent({ type: "execution:end", executionId, graphId, ...evt });
   });
 
+  // Workflow-level wall-clock budget. Per-workflow `timeout` (in the
+  // parsed DSL) wins; falls back to EXECUTION_DEFAULT_WORKFLOW_TIMEOUT.
+  // null = no budget (operator disabled it via env="" + no DSL override).
+  //
+  // Caveat about pause/resume: a workflow waiting on a `user` plugin is
+  // re-enqueued as a fresh job when /respond fires, so the timer resets
+  // on each resume — we measure wall-clock per job, not per
+  // logical-execution. That's the right behaviour because the "pause"
+  // is intentional and the timer should only count active work.
+  const workflowTimeoutMs = resolveWorkflowTimeoutMs(parsed);
+  span?.setAttribute("workflow.timeout_ms", workflowTimeoutMs || 0);
+
   let result;
   try {
-    if (isBatch) {
-      // Batch mode doesn't yet support per-item resume; the outer
-      // executor's persistence still fires for non-batch nodes inside
-      // the batch DAG, just not per-item.
-      result = await executeBatch(parsed, {
-        executionId, emitter, items: batchItems,
-        concurrency: 4,
-        persistNodeState: upsertNodeState,
-      });
-    } else {
-      result = await executeDag(parsed, {
-        executionId, emitter, initialData,
-        // Step-1 of the durable-execution design: write state per node.
-        persistNodeState:  upsertNodeState,
-        // Resume hooks — both no-ops on a fresh run.
-        initialNodeStates,
-        inputsOverride,
-      });
-    }
+    const exec = isBatch
+      ? executeBatch(parsed, {
+          // Batch mode doesn't yet support per-item resume; the outer
+          // executor's persistence still fires for non-batch nodes inside
+          // the batch DAG, just not per-item.
+          executionId, emitter, items: batchItems,
+          concurrency: 4,
+          persistNodeState: upsertNodeState,
+        })
+      : executeDag(parsed, {
+          executionId, emitter, initialData,
+          // Step-1 of the durable-execution design: write state per node.
+          persistNodeState:  upsertNodeState,
+          // Resume hooks — both no-ops on a fresh run.
+          initialNodeStates,
+          inputsOverride,
+        });
+    result = await withTimeout(
+      exec,
+      workflowTimeoutMs,
+      () => new WorkflowTimeoutError(workflowTimeoutMs),
+    );
   } catch (e) {
     await pool.query(
       "UPDATE executions SET status='failed', finished_at=NOW(), error=$2 WHERE id=$1",
@@ -243,10 +275,14 @@ async function processExecutionBody(job, span) {
   function redact(ctx) {
     if (!ctx || typeof ctx !== "object") return ctx;
     // Strip transient/preloaded engine surfaces. memory + execution are
-    // both rebuilt per run; _ancestors is queue-payload metadata
-    // (workflow.fire's spawn chain) — none of these belong in
-    // executions.context.
-    const { config, env, memory, execution, _ancestors, ...rest } = ctx;
+    // both rebuilt per run; _ancestors / _parsed / _tokens / _fireCount
+    // are engine-internal runtime bookkeeping — none of these belong
+    // in executions.context.
+    const {
+      config, env, memory, execution,
+      _ancestors, _parsed, _tokens, _fireCount,
+      ...rest
+    } = ctx;
     return rest;
   }
 

@@ -1,4 +1,5 @@
 import { executeDag } from "./executor.js";
+import { assertIterationCap } from "./limits.js";
 
 /**
  * Run the entire DAG once per item in `items` (in parallel up to `concurrency`).
@@ -15,6 +16,12 @@ import { executeDag } from "./executor.js";
  */
 export async function executeBatch(parsed, opts) {
   const items = opts.items || [];
+  // Refuse a batch larger than EXECUTION_MAX_ITERATIONS (default 10k).
+  // Per-workflow `maxIterations` in the DSL overrides the env default.
+  // The cap is enforced UP-FRONT, before any node fires — a 50k-item
+  // request fails immediately instead of consuming the first 10k worth
+  // of work and then realising it's too big.
+  assertIterationCap(parsed, items.length, "executeBatch");
   const concurrency = Math.max(1, opts.concurrency || 4);
   const emitter = opts.emitter;
   const parentExecutionId = opts.executionId;

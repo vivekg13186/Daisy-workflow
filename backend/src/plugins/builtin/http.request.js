@@ -24,9 +24,21 @@ export default {
       body:    {},
     },
   },
-  async execute({ url, method = "GET", headers = {}, body, timeoutMs = 15000 }) {
+  async execute({ url, method = "GET", headers = {}, body, timeoutMs = 15000 }, _ctx, _hooks, opts = {}) {
+    // Two abort sources merged into one signal:
+    //   1. The plugin's own `timeoutMs` (back-compat — long-standing
+    //      per-call default of 15s, overridable in node inputs).
+    //   2. The engine's signal (opts.signal) which aborts when the
+    //      node-level timeout fires or the surrounding workflow gives
+    //      up. Honoring it shortens the leak window on hung sockets.
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), timeoutMs);
+    // If the engine signals abort, propagate to our local controller.
+    const onEngineAbort = () => ac.abort(opts.signal?.reason);
+    if (opts.signal) {
+      if (opts.signal.aborted) ac.abort(opts.signal.reason);
+      else opts.signal.addEventListener("abort", onEngineAbort, { once: true });
+    }
     try {
       const res = await fetch(url, {
         method,
@@ -43,6 +55,7 @@ export default {
       };
     } finally {
       clearTimeout(t);
+      if (opts.signal) opts.signal.removeEventListener?.("abort", onEngineAbort);
     }
   },
 };

@@ -10,6 +10,7 @@ A JSON-defined DAG workflow engine with a drag-and-drop visual editor, pluggable
 4. [Plugin reference](./04-plugins.md) — every built-in action plugin with inputs, outputs, and examples.
 5. [Configs encryption](./05-configs-encryption.md) — KMS envelope encryption, providers, rotation, audit.
 6. [Auth & authorization](./06-auth.md) — local accounts, OIDC, roles, multi-workspace, token rotation.
+7. [Execution limits](./07-execution-limits.md) — wall-clock timeouts, retry cap, layered defaults.
 
 ## Quick links
 
