@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
-import { NotFoundError } from "../utils/errors.js";
+import { NotFoundError, ValidationError } from "../utils/errors.js";
+import { enqueueExecution } from "../queue/queue.js";
+import { resetNodeForReplay, upsertNodeState } from "../engine/nodeStateStore.js";
 
 const router = Router();
 
@@ -49,9 +51,215 @@ router.get("/:id", async (req, res, next) => {
       "SELECT * FROM executions WHERE id=$1", [req.params.id],
     );
     if (execs.length === 0) throw new NotFoundError("execution");
-    // Per-node history is no longer in Postgres — clients should read the
-    // post-execution summary from executions.context.nodes (the engine's ctx).
-    res.json(execs[0]);
+
+    // Pull the durable per-node state so the InstanceViewer can offer
+    // resume/skip/edit on the failed nodes. The engine also writes a
+    // post-run summary to executions.context.nodes, but that's only
+    // populated at the END of a run — node_states is the live truth.
+    //
+    // Tolerant of a missing table (42P01): if migration 010 hasn't run
+    // yet, fall back to an empty list. The InstanceViewer will then
+    // synthesize failed-node entries from the run's context.nodes
+    // summary so users with existing runs still see the recovery UI.
+    let nodeStates = [];
+    try {
+      const r = await pool.query(
+        `SELECT node_name, status, attempts, resolved_inputs, output, error,
+                reason, started_at, finished_at, updated_at
+           FROM node_states WHERE execution_id=$1
+           ORDER BY started_at NULLS LAST, node_name`,
+        [req.params.id],
+      );
+      nodeStates = r.rows;
+    } catch (e) {
+      if (e.code !== "42P01") throw e;
+      // Table missing — soft-fail, see comment above.
+    }
+
+    res.json({ ...execs[0], node_states: nodeStates });
+  } catch (e) { next(e); }
+});
+
+/**
+ * POST /executions/:id/resume
+ *
+ * Re-run a failed execution. Optional body:
+ *   {
+ *     "node":   "<failed-node-name>",
+ *     "inputs": { … }            // overrides for that node only
+ *   }
+ *
+ * Behaviour:
+ *   1. The named failed node (or the first failed one if `node` omitted)
+ *      and every downstream node currently marked failed/skipped is reset
+ *      back to `pending` so the executor's resume path will run them.
+ *   2. Already-success nodes upstream are kept as-is (their outputs feed
+ *      back into ctx via the executor's rehydration loop).
+ *   3. If `inputs` is supplied, they're stashed in node_states.resolved_inputs
+ *      AND passed as an inputsOverride on the queue payload so the executor
+ *      uses them verbatim instead of re-resolving the original ${...} template.
+ *   4. Re-enqueues the same executionId. The worker detects resume mode by
+ *      finding existing node_states rows.
+ */
+router.post("/:id/resume", async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id, graph_id, status FROM executions WHERE id=$1", [req.params.id],
+    );
+    if (rows.length === 0) throw new NotFoundError("execution");
+    const exec = rows[0];
+    if (exec.status === "running" || exec.status === "queued") {
+      throw new ValidationError(`execution is ${exec.status}; cannot resume an in-flight run`);
+    }
+
+    const targetNode  = req.body?.node || null;
+    const inputs      = req.body?.inputs ?? null;
+    const inputsOverride = {};
+
+    // Decide which nodes to reset back to pending. Strategy: pick the
+    // failed node the user is replaying (or the only failed one), plus
+    // every node currently marked skipped (most likely cascade-skipped
+    // dependents of the failure) — those should re-run too once their
+    // upstream dependency succeeds.
+    let nodeToReset = targetNode;
+    if (!nodeToReset) {
+      const { rows: f } = await pool.query(
+        "SELECT node_name FROM node_states WHERE execution_id=$1 AND status='failed' ORDER BY finished_at ASC LIMIT 1",
+        [req.params.id],
+      );
+      if (f.length === 0) {
+        throw new ValidationError("no failed node to resume from");
+      }
+      nodeToReset = f[0].node_name;
+    }
+    await resetNodeForReplay(req.params.id, nodeToReset, "pending");
+    // Note: we no longer reset every existing `skipped` row. The engine
+    // doesn't pre-emptively skip downstream nodes on terminate any more
+    // (they stay pending), so the only `skipped` rows remaining are
+    // either user-initiated skips or executeIf=false / cascade decisions
+    // — both should be preserved across a resume so the user's previous
+    // recovery choices stick.
+
+    if (inputs && typeof inputs === "object") {
+      inputsOverride[nodeToReset] = inputs;
+      await upsertNodeState(req.params.id, nodeToReset, {
+        status: "pending",
+        resolvedInputs: inputs,
+      });
+    }
+
+    await pool.query(
+      `UPDATE executions
+          SET status      = 'queued',
+              error       = NULL,
+              finished_at = NULL
+        WHERE id = $1`,
+      [req.params.id],
+    );
+    await enqueueExecution({
+      executionId: req.params.id,
+      graphId:     exec.graph_id,
+      inputsOverride,
+    });
+    res.status(202).json({ id: req.params.id, status: "queued", resumedFrom: nodeToReset });
+  } catch (e) { next(e); }
+});
+
+/**
+ * POST /executions/:id/skip
+ *
+ * Mark a failed node `skipped` (so the engine's skip-cascade marks every
+ * descendant skipped on resume) and re-enqueue. Useful when the user
+ * decides the failed step isn't required — e.g. a flaky email send that
+ * shouldn't block the rest of the workflow.
+ */
+router.post("/:id/skip", async (req, res, next) => {
+  try {
+    const node = req.body?.node;
+    if (!node) throw new ValidationError("body.node is required");
+
+    const { rows } = await pool.query(
+      "SELECT id, graph_id, status FROM executions WHERE id=$1", [req.params.id],
+    );
+    if (rows.length === 0) throw new NotFoundError("execution");
+    const exec = rows[0];
+    if (exec.status === "running" || exec.status === "queued") {
+      throw new ValidationError(`execution is ${exec.status}; cannot edit an in-flight run`);
+    }
+    await resetNodeForReplay(req.params.id, node, "skipped");
+    // Descendants are already PENDING (the executor leaves unrun nodes
+    // pending on terminate-failure), so we don't need to preemptively
+    // touch them here. On resume, the cascade in runOne marks them
+    // SKIPPED as their now-skipped parent gets hydrated.
+    await pool.query(
+      `UPDATE executions SET status='queued', error=NULL, finished_at=NULL WHERE id=$1`,
+      [req.params.id],
+    );
+    await enqueueExecution({ executionId: req.params.id, graphId: exec.graph_id });
+    res.status(202).json({ id: req.params.id, status: "queued", skippedNode: node });
+  } catch (e) { next(e); }
+});
+
+/**
+ * POST /executions/:id/nodes/:nodeName/respond
+ *
+ * Resolve a waiting `user` plugin node. The request body becomes the
+ * node's `output.data`; the row's status flips to success and the
+ * execution is re-enqueued. The worker's resume path replays the
+ * node's outputs (mapping + outputVar) so descendants can read the
+ * posted JSON.
+ *
+ * Body shapes accepted:
+ *   • { data: <anything> }   — explicit (recommended)
+ *   • <anything-else>        — the whole body becomes `data`
+ *
+ * The endpoint is idempotent against the same payload but rejects
+ * responses to nodes that aren't currently waiting (e.g. already
+ * resumed, never waited, or the execution itself was deleted).
+ */
+router.post("/:id/nodes/:nodeName/respond", async (req, res, next) => {
+  try {
+    const { id, nodeName } = req.params;
+    const body = req.body;
+    const data = (body && typeof body === "object" && Object.prototype.hasOwnProperty.call(body, "data"))
+      ? body.data
+      : body;
+
+    const { rows: execs } = await pool.query(
+      "SELECT id, graph_id, status FROM executions WHERE id=$1", [id],
+    );
+    if (execs.length === 0) throw new NotFoundError("execution");
+    const exec = execs[0];
+
+    const { rows: states } = await pool.query(
+      "SELECT status FROM node_states WHERE execution_id=$1 AND node_name=$2",
+      [id, nodeName],
+    );
+    if (states.length === 0) throw new NotFoundError(`node ${nodeName}`);
+    if (states[0].status !== "waiting") {
+      throw new ValidationError(`node "${nodeName}" is not waiting (status=${states[0].status})`);
+    }
+
+    // Mark the node success with the posted JSON as its output. The
+    // resume path's rehydration loop replays this through outputs:/
+    // outputVar so downstream nodes can read it as ${<var>}.
+    const respondedAt = new Date().toISOString();
+    const output = { data, respondedAt };
+    await upsertNodeState(id, nodeName, {
+      status:      "success",
+      output,
+      finishedAt:  respondedAt,
+    });
+
+    // Flip the execution row back to queued and re-enqueue. The worker
+    // sees existing node_states rows and enters resume mode.
+    await pool.query(
+      `UPDATE executions SET status='queued', error=NULL, finished_at=NULL WHERE id=$1`,
+      [id],
+    );
+    await enqueueExecution({ executionId: id, graphId: exec.graph_id });
+
+    res.status(202).json({ id, node: nodeName, status: "queued" });
   } catch (e) { next(e); }
 });
 

@@ -13,6 +13,11 @@ import { logNodeEvent } from "./utils/eventLog.js";
 import { loadTriggerBuiltins } from "./triggers/registry.js";
 import { startTriggerManager, stopTriggerManager } from "./triggers/manager.js";
 import { loadConfigsMap, buildConfigEnv } from "./configs/loader.js";
+import {
+  upsertNodeState,
+  loadNodeStates,
+  reapOrphanedExecutions,
+} from "./engine/nodeStateStore.js";
 
 await loadBuiltins();
 await loadTriggerBuiltins();
@@ -20,12 +25,30 @@ await loadTriggerBuiltins();
 // logged but don't crash the worker.
 startTriggerManager().catch(e => log.error("trigger manager start failed", { error: e.message }));
 
+// Reap any execution rows left in `running` from a previous crash. We
+// don't know what BullMQ has in flight at this exact moment, but a fresh
+// worker process has yet to claim anything — so any RUNNING row is by
+// definition stale until it's re-delivered to us as a job.
+reapOrphanedExecutions().catch(e => log.warn("orphan reap failed", { error: e.message }));
+
 async function processExecution(job) {
   const { executionId, graphId } = job.data;
-  log.info("execution start", { executionId, graphId });
+
+  // Resume detection: a job that arrives with status='queued' but already
+  // has node_states rows is a user-initiated resume (POST .../resume or
+  // .../skip on the executions API). We want to skip the success rows and
+  // re-run only what's pending; nothing else needs to know whether we're
+  // on a fresh run or a resume.
+  const initialNodeStates = await loadNodeStates(executionId);
+  const isResume = Object.keys(initialNodeStates).length > 0;
+  const inputsOverride = job.data.inputsOverride || {};
+
+  log.info(isResume ? "execution resume" : "execution start", {
+    executionId, graphId, resumedNodes: Object.keys(initialNodeStates).length,
+  });
 
   await pool.query(
-    "UPDATE executions SET status='running', started_at=NOW() WHERE id=$1",
+    "UPDATE executions SET status='running', started_at=COALESCE(started_at, NOW()) WHERE id=$1",
     [executionId],
   );
 
@@ -90,12 +113,23 @@ async function processExecution(job) {
   let result;
   try {
     if (isBatch) {
+      // Batch mode doesn't yet support per-item resume; the outer
+      // executor's persistence still fires for non-batch nodes inside
+      // the batch DAG, just not per-item.
       result = await executeBatch(parsed, {
         executionId, emitter, items: batchItems,
         concurrency: 4,
+        persistNodeState: upsertNodeState,
       });
     } else {
-      result = await executeDag(parsed, { executionId, emitter, initialData });
+      result = await executeDag(parsed, {
+        executionId, emitter, initialData,
+        // Step-1 of the durable-execution design: write state per node.
+        persistNodeState:  upsertNodeState,
+        // Resume hooks — both no-ops on a fresh run.
+        initialNodeStates,
+        inputsOverride,
+      });
     }
   } catch (e) {
     await pool.query(

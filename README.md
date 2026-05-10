@@ -55,6 +55,11 @@ Use AI-driven monitoring and recovery mechanisms to automatically detect, diagno
 
 ## Features
 
+### Engine
+- Durable Execution - resume or skip on failure
+- Human in loop - node wait for user to approve
+
+
 ### Triggers
 - Email (SMTP)
 - Scheduled triggers (cron-like)
@@ -64,6 +69,7 @@ Use AI-driven monitoring and recovery mechanisms to automatically detect, diagno
 ### Plugins
 
 #### Core
+ 
 - [Condition](./wiki/plugins/condition.md)
 - [Delay](./wiki/plugins/delay.md)
 - [Transform](./wiki/plugins/transform.md)

@@ -37,6 +37,22 @@ export const Executions = {
   },
   get:    (id) => api.get(`/executions/${id}`).then(r => r.data),
   remove: (id) => api.delete(`/executions/${id}`),
+
+  // Resume from a failed node. `node` defaults to the only/first failed
+  // node; `inputs` (optional) supplies an edited input map that the
+  // engine will use verbatim on the resume run.
+  resume: (id, payload = {}) => api.post(`/executions/${id}/resume`, payload).then(r => r.data),
+
+  // Skip a failed node — marks it `skipped` (so descendants cascade)
+  // and re-enqueues. Body must include `{ node: "<name>" }`.
+  skip:   (id, node) => api.post(`/executions/${id}/skip`, { node }).then(r => r.data),
+
+  // Resolve a `user` plugin node that's currently in WAITING status.
+  // `data` becomes the node's output.data; the execution re-enqueues
+  // and the worker's resume path replays outputs so downstream nodes
+  // can read it as ${<var>}.
+  respond: (id, node, data) =>
+    api.post(`/executions/${id}/nodes/${encodeURIComponent(node)}/respond`, { data }).then(r => r.data),
 };
 
 export const Plugins = {

@@ -220,6 +220,7 @@ html, body, #app {
 .status-skipped  { background: rgba(154, 163, 178, 0.18); color: var(--text-soft); }
 .status-running  { background: var(--warning-soft); color: var(--warning); }
 .status-retrying { background: var(--warning-soft); color: var(--warning); }
+.status-waiting  { background: var(--primary-soft); color: var(--primary); }
 .status-queued,
 .status-pending,
 .status-partial,

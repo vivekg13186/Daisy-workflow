@@ -11,7 +11,32 @@ export const NodeStatus = Object.freeze({
   SUCCESS:  "success",
   FAILED:   "failed",
   SKIPPED:  "skipped",
+  // Plugin signalled "stop here, wait for an external response".
+  // The `user` plugin uses this to pause a workflow until a human (or
+  // an external system) POSTs JSON to /executions/:id/nodes/:name/respond.
+  WAITING:  "waiting",
 });
+
+/**
+ * Sentinel marker a plugin can return to signal "pause this branch
+ * until an external responder calls POST /executions/:id/nodes/:name/respond".
+ *
+ * Plugins return:
+ *
+ *     { [WAITING_MARKER]: true, prompt: "...", schema?: {…} }
+ *
+ * The executor:
+ *   • marks the node WAITING with the rest of the object as its output
+ *     (so the InstanceViewer can render the prompt);
+ *   • does NOT decrement successor indegrees (so descendants stay
+ *     pending until the human responds);
+ *   • lets the rest of the DAG continue running its other branches.
+ *
+ * When the responder posts JSON, the API rewrites node_states.output to
+ * that JSON, flips the row to success, re-enqueues the execution, and
+ * the worker's resume path replays outputs into ctx so descendants run.
+ */
+export const WAITING_MARKER = "__dag_waiting__";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -20,14 +45,28 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
  *
  * @param {object} parsed   Parsed DSL (already validated).
  * @param {object} opts
- *   - executionId  string (for event payloads)
- *   - initialData  object merged into ctx.data
- *   - emitter      optional EventEmitter; if omitted, a fresh one is created
+ *   - executionId       string (for event payloads + persistence keys)
+ *   - initialData       object merged into ctx.data
+ *   - emitter           optional EventEmitter; if omitted, a fresh one is created
+ *   - initialNodeStates optional { <nodeName>: { status, output, error, reason, ...} }
+ *                       used by the resume path to pre-populate already-completed
+ *                       nodes; the scheduler treats them as "done" without re-running.
+ *   - inputsOverride    optional { <nodeName>: <inputs object> } — when a resume
+ *                       supplies a fixed input map for a specific node, those
+ *                       inputs are used verbatim instead of re-resolving from ctx.
+ *   - persistNodeState  optional async (executionId, nodeName, partial) => void.
+ *                       Called on every lifecycle transition. The worker wires
+ *                       this to a node_states upsert; tests pass nothing.
  * @returns Promise<{status, ctx, nodes}>
  */
 export async function executeDag(parsed, opts = {}) {
   const emitter = opts.emitter || new EventEmitter();
   const executionId = opts.executionId || null;
+  const initialNodeStates = opts.initialNodeStates || {};
+  const inputsOverride = opts.inputsOverride || {};
+  const persistNodeState = typeof opts.persistNodeState === "function"
+    ? opts.persistNodeState
+    : null;
 
   const { adj, indegree, byName, roots } = buildDag(parsed);
   const remaining = new Map(indegree);                 // mutable copy
@@ -64,6 +103,10 @@ export async function executeDag(parsed, opts = {}) {
   // and read by the UI) in lockstep. Without this, several failure paths used
   // to update nodeResults only, leaving ctx.nodes missing entries — which made
   // the GraphView render the affected nodes as "pending" forever.
+  //
+  // Also fires the persistNodeState hook so the worker can incrementally
+  // upsert the row to Postgres. Errors from the hook are logged but don't
+  // abort the run — durable state is best-effort and never breaks execution.
   function recordOutcome(name, record) {
     nodeResults[name] = record;
     ctx.nodes[name] = {
@@ -75,28 +118,92 @@ export async function executeDag(parsed, opts = {}) {
       finishedAt: record.finishedAt ?? null,
       attempts: record.attempts ?? null,
     };
+    if (persistNodeState) {
+      Promise.resolve(persistNodeState(executionId, name, ctx.nodes[name]))
+        .catch(() => { /* swallow — see hook contract above */ });
+    }
   }
 
-  // Mark every still-unrun node as skipped (used on terminate).
-  function skipRest(reason) {
+  // Re-hydrate already-completed nodes from a previous attempt (resume mode).
+  // We only hydrate TERMINAL statuses (success / failed / skipped); rows
+  // marked `pending` are deliberately left alone so the scheduler runs
+  // them fresh. (The skip endpoint resets cascaded descendants back to
+  // pending so they get re-evaluated against the new parent state.)
+  //
+  // For each hydrated node:
+  //   • the scheduler treats it as already done (skips its runOne call);
+  //   • on success we replay outputs:/outputVar bindings so downstream
+  //     ${var} expressions resolve to the same values they did originally;
+  //   • indegrees of successors are decremented so the ready-set rolls
+  //     forward to the first node that still needs to run.
+  if (Object.keys(initialNodeStates).length) {
+    const pluginPrimary = (action) => registry.get(action)?.primaryOutput;
+    // WAITING is intentionally *not* in this set — a still-waiting row
+    // means the user hasn't responded yet. We hydrate it into
+    // nodeResults so the scheduler skips it and we don't decrement its
+    // successors (preserving their pending status), without trying to
+    // replay a non-existent output.
+    const TERMINAL = new Set([NodeStatus.SUCCESS, NodeStatus.FAILED, NodeStatus.SKIPPED]);
+    for (const [name, prev] of Object.entries(initialNodeStates)) {
+      const node = byName.get(name);
+      if (!node) continue;
+      if (prev.status === NodeStatus.WAITING) {
+        // Still waiting — record locally so the scheduler skips it, but
+        // do NOT decrement successor indegrees. Descendants stay pending
+        // until the responder turns this into SUCCESS via the API.
+        nodeResults[name] = { ...prev };
+        ctx.nodes[name]   = { ...prev };
+        continue;
+      }
+      if (!TERMINAL.has(prev.status)) continue;     // pending / running → run fresh
+      if (prev.status === NodeStatus.SUCCESS && prev.output != null) {
+        applyOutputMapping(prev.output, node.outputs, ctx);
+        if (node.outputVar) {
+          const primary = pluginPrimary(node.action);
+          ctx[node.outputVar] =
+            primary && prev.output && typeof prev.output === "object" && primary in prev.output
+              ? prev.output[primary]
+              : prev.output;
+        }
+      }
+      // Mirror the prior outcome locally; do NOT re-fire persistNodeState
+      // because the row is already authoritative on disk.
+      nodeResults[name] = { ...prev };
+      ctx.nodes[name]   = { ...prev };
+      // Roll the scheduler's ready-set forward by one indegree per successor.
+      for (const next of adj.get(name) || []) {
+        remaining.set(next, Math.max(0, remaining.get(next) - 1));
+      }
+    }
+  }
+
+  // Aborted runs (onError=terminate) bail out before reaching every node.
+  // We DO NOT mark the unreached nodes as skipped — that's a meaningful
+  // signal reserved for executeIf=false / upstream-skipped / user-skip.
+  // Instead they stay PENDING so the InstanceViewer can show "this work
+  // didn't happen" and Resume can pick them up later. Persisted explicitly
+  // (rather than just left out of ctx.nodes) so the UI has a row per
+  // declared node and can render its terminate-state correctly.
+  function markRestPending(reason) {
     for (const name of byName.keys()) {
       if (!nodeResults[name]) {
-        recordOutcome(name, { status: NodeStatus.SKIPPED, reason });
-        emit("node:status", { node: name, status: NodeStatus.SKIPPED, reason });
+        recordOutcome(name, { status: NodeStatus.PENDING, reason });
+        emit("node:status", { node: name, status: NodeStatus.PENDING, reason });
       }
     }
   }
 
   async function runOne(node) {
     // 0. Skip-cascade. If any parent ended up SKIPPED, this node inherits
-    //    that status — that's the "all_success" semantic familiar from
-    //    Airflow / Prefect: a gated branch upstream short-circuits the
-    //    whole subtree.
+    //    that status — the "all_success" semantic familiar from
+    //    Airflow / Prefect: gating one branch short-circuits the whole
+    //    subtree below it. This applies to both system skips
+    //    (executeIf=false / upstream-skipped) and user-initiated skips
+    //    via the InstanceViewer (the user said "abandon this branch").
     //
-    //    We only cascade for SKIPPED parents. A FAILED parent under
-    //    onError=continue is a deliberate "keep going" signal from the
-    //    user, so its downstream still runs. (FAILED with onError=terminate
-    //    aborts the run elsewhere; skipRest() handles those.)
+    //    A FAILED parent under onError=continue is a "keep going"
+    //    signal, so its downstream still runs. (FAILED with
+    //    onError=terminate aborts the run elsewhere.)
     const skippedParent = (parents.get(node.name) || []).find(
       p => nodeResults[p]?.status === NodeStatus.SKIPPED
     );
@@ -123,14 +230,21 @@ export async function executeDag(parsed, opts = {}) {
       }
     }
 
-    // 2. Resolve inputs once (for non-batch).
+    // 2. Resolve inputs once (for non-batch). Resume mode can supply a
+    //    pre-baked input object (the user edited the failed inputs through
+    //    the InstanceViewer) — in that case skip resolution and pass the
+    //    map verbatim so the user's edits aren't smashed by the resolver.
     const rawInputs = node.inputs || {};
     let resolvedInputs;
-    try { resolvedInputs = resolve(rawInputs, ctx); }
-    catch (e) {
-      recordOutcome(node.name, { status: NodeStatus.FAILED, error: `input resolve failed: ${e.message}` });
-      emit("node:status", { node: node.name, status: NodeStatus.FAILED, error: e.message });
-      return handleFailure(node, e);
+    if (Object.prototype.hasOwnProperty.call(inputsOverride, node.name)) {
+      resolvedInputs = inputsOverride[node.name];
+    } else {
+      try { resolvedInputs = resolve(rawInputs, ctx); }
+      catch (e) {
+        recordOutcome(node.name, { status: NodeStatus.FAILED, error: `input resolve failed: ${e.message}` });
+        emit("node:status", { node: node.name, status: NodeStatus.FAILED, error: e.message });
+        return handleFailure(node, e);
+      }
     }
 
     // 3. Batch handling — fan out over an array.
@@ -152,6 +266,16 @@ export async function executeDag(parsed, opts = {}) {
 
     const startedAt = new Date().toISOString();
     emit("node:status", { node: node.name, status: NodeStatus.RUNNING, input: resolvedInputs });
+    // Mark RUNNING in the durable state with the resolved inputs attached.
+    // If the worker crashes mid-plugin, the InstanceViewer will see this
+    // row + the user can edit `resolved_inputs` and resume.
+    if (persistNodeState) {
+      Promise.resolve(persistNodeState(executionId, node.name, {
+        status:         NodeStatus.RUNNING,
+        startedAt,
+        resolvedInputs,
+      })).catch(() => { /* see persistNodeState contract */ });
+    }
 
     const attemptOnce = async (input) => {
       const maxRetries = node.retry || 0;
@@ -204,6 +328,24 @@ export async function executeDag(parsed, opts = {}) {
       return handleFailure(node, e);
     }
 
+    // 3.5 Waiting branch — the plugin is asking us to pause until
+    //     someone POSTs a response. Mark the node WAITING with its
+    //     prompt/schema as the output (handy for the InstanceViewer)
+    //     and return WITHOUT propagating outputs to ctx. The scheduler
+    //     loop further down knows to NOT decrement successor indegrees
+    //     when a node ends WAITING, so descendants stay pending.
+    const isWaiting = output && typeof output === "object" && output[WAITING_MARKER] === true;
+    if (isWaiting) {
+      const finishedAt = new Date().toISOString();
+      recordOutcome(node.name, {
+        status: NodeStatus.WAITING, output, attempts, startedAt, finishedAt,
+      });
+      emit("node:status", {
+        node: node.name, status: NodeStatus.WAITING, output, attempts, startedAt, finishedAt,
+      });
+      return;
+    }
+
     // 4. Surface the node's outputs into ctx.
     //   - Each `outputs: { pluginField: ctxVar }` mapping writes the named
     //     subfield to the ROOT of ctx (so downstream nodes do `${ctxVar}`).
@@ -240,36 +382,58 @@ export async function executeDag(parsed, opts = {}) {
 
   // Layer-by-layer scheduler.
   emit("execution:start", { graph: parsed.name });
-  const ready = [...roots];
+  // Build the initial ready-set:
+  //   • normally that's just the DAG's natural roots,
+  //   • on resume some of those roots are already nodeResults[]'d, so we
+  //     skip them and pick up any node whose remaining indegree is now 0
+  //     after the rehydration loop above.
+  const ready = [];
+  for (const name of byName.keys()) {
+    if (nodeResults[name]) continue;          // already done (resumed)
+    if ((remaining.get(name) || 0) === 0) ready.push(name);
+  }
   while (ready.length && !aborted) {
     const layer = ready.splice(0, ready.length);
     await Promise.all(layer.map(name => runOne(byName.get(name))));
     if (aborted) break;
     for (const name of layer) {
-      for (const next of adj.get(name)) {
+      // A node that ended WAITING is asking us to pause its branch.
+      // Don't decrement its successors' indegrees — they stay pending
+      // until a responder POSTs JSON and the resumed run replays the
+      // node as success.
+      if (nodeResults[name]?.status === NodeStatus.WAITING) continue;
+      for (const next of adj.get(name) || []) {
         const r = remaining.get(next) - 1;
         remaining.set(next, r);
-        if (r === 0) ready.push(next);
+        if (r === 0 && !nodeResults[next]) ready.push(next);
       }
     }
   }
 
-  if (aborted) skipRest(aborting?.reason || "aborted");
+  if (aborted) markRestPending(aborting?.reason || "aborted");
 
-  // Final reconciliation: any declared node that didn't get an outcome (e.g.
-  // engine bug, unexpected throw) is recorded as skipped so the persisted
-  // ctx.nodes always has a row per declared node — UI never shows "pending".
+  // Final reconciliation: any declared node that still hasn't been
+  // recorded (e.g. engine bug, unexpected throw, or just because the
+  // run aborted) gets marked PENDING. That guarantees ctx.nodes has a
+  // row per declared node so the UI can render every node's status,
+  // and "pending" means "didn't run yet" — perfectly meaningful for
+  // resume / skip.
   for (const name of byName.keys()) {
     if (!nodeResults[name]) {
-      recordOutcome(name, { status: NodeStatus.SKIPPED, reason: "not reached" });
+      recordOutcome(name, { status: NodeStatus.PENDING, reason: "not reached" });
     }
   }
 
   // Aggregate status.
+  // - any failed node + onError=terminate → 'failed' (set above by aborted)
+  // - any failed node otherwise           → 'partial'
+  // - any waiting node (with no failures) → 'waiting' (resume later)
+  // - everything else                     → 'success'
   const statuses = Object.values(nodeResults).map(r => r.status);
   let overall;
   if (aborted) overall = "failed";
-  else if (statuses.some(s => s === NodeStatus.FAILED)) overall = "partial";
+  else if (statuses.some(s => s === NodeStatus.FAILED))  overall = "partial";
+  else if (statuses.some(s => s === NodeStatus.WAITING)) overall = "waiting";
   else overall = "success";
 
   emit("execution:end", { status: overall, nodes: nodeResults });

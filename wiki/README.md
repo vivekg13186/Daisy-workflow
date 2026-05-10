@@ -16,12 +16,7 @@ A JSON-defined DAG workflow engine with a drag-and-drop visual editor, pluggable
 - Frontend code: [`frontend/src/`](../frontend/src/)
 - Architecture diagram: [`ARCHITECTURE.md`](./ARCHITECTURE.md)
 
-
-> [!NOTE]
-> The DSL was originally YAML; it is now JSON end-to-end. The editor is a
-> visual canvas (Vue Flow + schema-driven property panels) — the JSON tab
-> shows the saved shape but is read-only. If you have legacy YAML files,
-> convert them to JSON before importing.
+ 
 
 > [!NOTE]
 > This application is developed with the support of AI agents.
