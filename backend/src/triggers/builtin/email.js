@@ -44,7 +44,7 @@ export default {
     },
   },
 
-  async subscribe(config, onFire) {
+  async subscribe(config, onFire, ctx = {}) {
     if (!config?.config) {
       throw new Error("email trigger: `config` is required (name of a stored mail.imap configuration)");
     }
@@ -52,7 +52,7 @@ export default {
     // Resolve the named configuration. Configs loader decrypts secret
     // fields on the way out; we use those plaintext values only for the
     // duration of this connection — they're never persisted anywhere.
-    const configsMap = await loadConfigsMap();
+    const configsMap = await loadConfigsMap(ctx.workspaceId);
     const cfg = configsMap[config.config];
     if (!cfg) {
       throw new Error(

@@ -37,11 +37,12 @@ export default {
 
   async execute(input, ctx) {
     const length = await appendKv({
-      scope:     "workflow",
-      scopeId:   ctx?.execution?.graphId || null,
-      namespace: input.namespace || "kv",
-      key:       input.key,
-      item:      input.item ?? null,
+      workspaceId: ctx?.execution?.workspaceId,
+      scope:       "workflow",
+      scopeId:     ctx?.execution?.graphId || null,
+      namespace:   input.namespace || "kv",
+      key:         input.key,
+      item:        input.item ?? null,
     });
     return { key: input.key, length };
   },

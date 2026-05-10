@@ -39,6 +39,7 @@ export default {
 
   async execute(input, ctx) {
     const turns = await loadHistory({
+      workspaceId:    ctx?.execution?.workspaceId,
       scope:          "workflow",
       scopeId:        ctx?.execution?.graphId || null,
       conversationId: input.conversationId,

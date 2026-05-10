@@ -5,20 +5,28 @@
 // don't accumulate as new rows; users keep snapshots by hitting the
 // Archive button, which copies the current state into archived_graphs.
 //
+// Auth model (PR 2):
+//   • Every route requires a logged-in caller (requireUser).
+//   • Read routes  — admin, editor, viewer.
+//   • Write routes (POST/PUT/DELETE/execute/archive) — admin, editor.
+//   • Workspace scoping — every query carries
+//     `workspace_id = req.user.workspaceId` so a caller can only
+//     see / mutate graphs in their active workspace. The DB-level
+//     NOT NULL constraint is the fail-safe.
+//
 // Endpoints:
 //   GET    /graphs                              list live workflows
 //   GET    /graphs/:id                          full live row
-//   POST   /graphs                              create (refuses duplicate name)
-//   PUT    /graphs/:id                          in-place update (id unchanged)
+//   POST   /graphs                              create
+//   PUT    /graphs/:id                          in-place update
 //   DELETE /graphs/:id                          soft delete
 //   POST   /graphs/validate                     parse + validate without saving
 //   POST   /graphs/:id/execute                  enqueue an execution
 //
-//   POST   /graphs/:id/archives                 snapshot current state
-//   GET    /graphs/:id/archives                 list archives for this graph
-//   GET    /graphs/:id/archives/:archiveId      one archive (with full dsl)
+//   POST   /graphs/:id/archives                 snapshot
+//   GET    /graphs/:id/archives                 list snapshots
+//   GET    /graphs/:id/archives/:archiveId      one snapshot
 //   POST   /graphs/:id/archives/:archiveId/restore
-//                                              overwrite live state from snapshot
 
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
@@ -26,6 +34,7 @@ import { pool, withTx } from "../db/pool.js";
 import { parseDag } from "../dsl/parser.js";
 import { enqueueExecution } from "../queue/queue.js";
 import { NotFoundError, ValidationError } from "../utils/errors.js";
+import { requireUser, requireRole } from "../middleware/auth.js";
 
 // `dsl` is the canonical body field. Older clients still posting `yaml`
 // keep working — we accept either here and treat the contents as JSON.
@@ -35,34 +44,38 @@ function readDsl(body) {
 
 const router = Router();
 
+// Every route in this file is gated. Auth runs first; per-route
+// requireRole(...) below enforces the read/write split.
+router.use(requireUser);
+
 // ──────────────────────────────────────────────────────────────────────
 // Live workflows
 // ──────────────────────────────────────────────────────────────────────
 
-router.get("/", async (_req, res, next) => {
+router.get("/", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(`
       SELECT id, name, created_at, updated_at
       FROM graphs
-      WHERE deleted_at IS NULL
+      WHERE deleted_at IS NULL AND workspace_id = $1
       ORDER BY name
-    `);
+    `, [req.user.workspaceId]);
     res.json(rows);
   } catch (e) { next(e); }
 });
 
-router.get("/:id", async (req, res, next) => {
+router.get("/:id", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      "SELECT * FROM graphs WHERE id=$1 AND deleted_at IS NULL",
-      [req.params.id],
+      "SELECT * FROM graphs WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL",
+      [req.params.id, req.user.workspaceId],
     );
     if (rows.length === 0) throw new NotFoundError("graph");
     res.json(rows[0]);
   } catch (e) { next(e); }
 });
 
-router.post("/validate", async (req, res, next) => {
+router.post("/validate", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const dsl = readDsl(req.body);
     if (!dsl) throw new ValidationError("dsl field required");
@@ -71,7 +84,7 @@ router.post("/validate", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.post("/", async (req, res, next) => {
+router.post("/", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const dsl = readDsl(req.body);
     if (!dsl) throw new ValidationError("dsl field required");
@@ -80,9 +93,9 @@ router.post("/", async (req, res, next) => {
     const id = uuid();
     try {
       await pool.query(
-        `INSERT INTO graphs (id, name, dsl, parsed)
-         VALUES ($1,$2,$3,$4)`,
-        [id, parsed.name, dsl, JSON.stringify(parsed)],
+        `INSERT INTO graphs (id, name, dsl, parsed, workspace_id)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [id, parsed.name, dsl, JSON.stringify(parsed), req.user.workspaceId],
       );
     } catch (e) {
       // Unique-name conflict — the partial unique index added by 008
@@ -96,15 +109,15 @@ router.post("/", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.put("/:id", async (req, res, next) => {
+router.put("/:id", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const dsl = readDsl(req.body);
     if (!dsl) throw new ValidationError("dsl field required");
     const parsed = parseDag(dsl);
 
     const { rows: existing } = await pool.query(
-      "SELECT name FROM graphs WHERE id=$1 AND deleted_at IS NULL",
-      [req.params.id],
+      "SELECT name FROM graphs WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL",
+      [req.params.id, req.user.workspaceId],
     );
     if (existing.length === 0) throw new NotFoundError("graph");
     if (existing[0].name !== parsed.name) {
@@ -118,18 +131,19 @@ router.put("/:id", async (req, res, next) => {
           SET dsl = $2,
               parsed = $3,
               updated_at = NOW()
-        WHERE id = $1`,
-      [req.params.id, dsl, JSON.stringify(parsed)],
+        WHERE id = $1 AND workspace_id = $4`,
+      [req.params.id, dsl, JSON.stringify(parsed), req.user.workspaceId],
     );
     res.json({ id: req.params.id, name: parsed.name });
   } catch (e) { next(e); }
 });
 
-router.delete("/:id", async (req, res, next) => {
+router.delete("/:id", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { rowCount } = await pool.query(
-      "UPDATE graphs SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL",
-      [req.params.id],
+      `UPDATE graphs SET deleted_at=NOW()
+        WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL`,
+      [req.params.id, req.user.workspaceId],
     );
     if (rowCount === 0) throw new NotFoundError("graph");
     res.status(200).json({ ok: true, id: req.params.id, deleted: "graph" });
@@ -138,10 +152,18 @@ router.delete("/:id", async (req, res, next) => {
 
 // ──────────────────────────────────────────────────────────────────────
 // Archives
+//
+// `archived_graphs` doesn't carry workspace_id directly — every row
+// references its source graph via `source_id`. We always check that
+// the source graph lives in the caller's workspace before exposing
+// or mutating its archive rows. One subquery per call is the cost.
 // ──────────────────────────────────────────────────────────────────────
 
-router.get("/:id/archives", async (req, res, next) => {
+router.get("/:id/archives", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
+    if (!await graphInWorkspace(req.params.id, req.user.workspaceId)) {
+      throw new NotFoundError("graph");
+    }
     const { rows } = await pool.query(
       `SELECT id, name, archived_at, reason
          FROM archived_graphs
@@ -154,8 +176,11 @@ router.get("/:id/archives", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.get("/:id/archives/:archiveId", async (req, res, next) => {
+router.get("/:id/archives/:archiveId", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
+    if (!await graphInWorkspace(req.params.id, req.user.workspaceId)) {
+      throw new NotFoundError("graph");
+    }
     const { rows } = await pool.query(
       `SELECT *
          FROM archived_graphs
@@ -167,13 +192,14 @@ router.get("/:id/archives/:archiveId", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.post("/:id/archives", async (req, res, next) => {
+router.post("/:id/archives", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const reason = (req.body?.reason ? String(req.body.reason) : "").slice(0, 200) || null;
 
     const { rows } = await pool.query(
-      "SELECT name, dsl, parsed FROM graphs WHERE id=$1 AND deleted_at IS NULL",
-      [req.params.id],
+      `SELECT name, dsl, parsed FROM graphs
+        WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL`,
+      [req.params.id, req.user.workspaceId],
     );
     if (rows.length === 0) throw new NotFoundError("graph");
     const g = rows[0];
@@ -188,20 +214,25 @@ router.post("/:id/archives", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.post("/:id/archives/:archiveId/restore", async (req, res, next) => {
+router.post("/:id/archives/:archiveId/restore", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     await withTx(async (c) => {
+      // First — make sure the live graph belongs to the caller. Rest
+      // of the work happens inside this same transaction so any
+      // failure after the source check rolls back cleanly.
+      const { rows: live } = await c.query(
+        `SELECT name FROM graphs
+          WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL`,
+        [req.params.id, req.user.workspaceId],
+      );
+      if (live.length === 0) throw new NotFoundError("graph");
+
       const { rows: arch } = await c.query(
         "SELECT name, dsl, parsed FROM archived_graphs WHERE id=$1 AND source_id=$2",
         [req.params.archiveId, req.params.id],
       );
       if (arch.length === 0) throw new NotFoundError("archive");
 
-      const { rows: live } = await c.query(
-        "SELECT name FROM graphs WHERE id=$1 AND deleted_at IS NULL",
-        [req.params.id],
-      );
-      if (live.length === 0) throw new NotFoundError("graph");
       if (live[0].name !== arch[0].name) {
         throw new ValidationError("name mismatch between archive and live graph");
       }
@@ -211,8 +242,8 @@ router.post("/:id/archives/:archiveId/restore", async (req, res, next) => {
             SET dsl = $2,
                 parsed = $3,
                 updated_at = NOW()
-          WHERE id = $1`,
-        [req.params.id, arch[0].dsl, arch[0].parsed],
+          WHERE id = $1 AND workspace_id = $4`,
+        [req.params.id, arch[0].dsl, arch[0].parsed, req.user.workspaceId],
       );
     });
     res.json({ ok: true, id: req.params.id });
@@ -220,27 +251,40 @@ router.post("/:id/archives/:archiveId/restore", async (req, res, next) => {
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// Execution (unchanged)
+// Execution
 // ──────────────────────────────────────────────────────────────────────
 
-router.post("/:id/execute", async (req, res, next) => {
+router.post("/:id/execute", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      "SELECT id FROM graphs WHERE id=$1 AND deleted_at IS NULL",
-      [req.params.id],
+      "SELECT id FROM graphs WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL",
+      [req.params.id, req.user.workspaceId],
     );
     if (rows.length === 0) throw new NotFoundError("graph");
 
     const execId = uuid();
     const userInput = req.body?.context || {};
     await pool.query(
-      `INSERT INTO executions (id, graph_id, status, inputs, context)
-       VALUES ($1,$2,'queued',$3,'{}'::jsonb)`,
-      [execId, req.params.id, JSON.stringify(userInput)],
+      `INSERT INTO executions (id, graph_id, status, inputs, context, workspace_id)
+       VALUES ($1,$2,'queued',$3,'{}'::jsonb,$4)`,
+      [execId, req.params.id, JSON.stringify(userInput), req.user.workspaceId],
     );
     await enqueueExecution({ executionId: execId, graphId: req.params.id });
     res.status(202).json({ executionId: execId, status: "queued" });
   } catch (e) { next(e); }
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// helpers
+// ──────────────────────────────────────────────────────────────────────
+
+/** True if a graph row exists in the given workspace + isn't soft-deleted. */
+async function graphInWorkspace(graphId, workspaceId) {
+  const { rows } = await pool.query(
+    "SELECT 1 FROM graphs WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL",
+    [graphId, workspaceId],
+  );
+  return rows.length > 0;
+}
 
 export default router;

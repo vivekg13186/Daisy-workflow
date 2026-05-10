@@ -33,10 +33,17 @@ import { pool } from "../db/pool.js";
 import { triggerRegistry } from "../triggers/registry.js";
 import { syncTrigger } from "../triggers/manager.js";
 import { ValidationError, HttpError } from "../utils/errors.js";
+import { requireUser, requireRole } from "../middleware/auth.js";
 
 const router = Router();
 
-router.get("/status", (_req, res) => {
+// All AI endpoints require an authenticated caller. The "Ask AI"
+// helper writes to triggers / proposes graphs scoped to the caller's
+// workspace, so the caller's role and workspace_id flow through into
+// each tool implementation via the `ctx` object passed to runAgentLoop.
+router.use(requireUser);
+
+router.get("/status", requireRole("admin", "editor", "viewer"), (_req, res) => {
   const k = config.ai.apiKey;
   const expectedPrefix = config.ai.provider === "anthropic" ? "sk-ant-" : "sk-";
   const warnings = [];
@@ -65,7 +72,7 @@ router.get("/status", (_req, res) => {
 // /chat — the legacy single-shot endpoint. Still wired up so older clients
 // (and the JSON-tab "Ask AI" button) keep working.
 // ──────────────────────────────────────────────────────────────────────
-router.post("/chat", async (req, res, next) => {
+router.post("/chat", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { messages } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -92,7 +99,7 @@ router.post("/chat", async (req, res, next) => {
 // text reply plus any side-effects that fired during the loop (proposed
 // graph, created trigger, ordered trace of every tool call).
 // ──────────────────────────────────────────────────────────────────────
-router.post("/agent/chat", async (req, res, next) => {
+router.post("/agent/chat", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { messages, graphId, currentGraph } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -114,6 +121,11 @@ router.post("/agent/chat", async (req, res, next) => {
       proposedGraph:  null,
       triggerCreated: null,
       traces:         [],
+      // Workspace surface so list_triggers / list_configs / create_trigger
+      // are scoped to the caller. Without this the AI agent could see /
+      // create resources across workspace boundaries.
+      workspaceId:    req.user.workspaceId,
+      role:           req.user.role,
     };
 
     const system = buildSystemPrompt({ agentMode: true, ctx });
@@ -329,7 +341,7 @@ async function runTool(name, input, ctx) {
     case "update_graph":      return toolUpdateGraph(input, ctx);
     case "list_triggers":     return toolListTriggers(ctx);
     case "create_trigger":    return toolCreateTrigger(input, ctx);
-    case "list_configs":      return toolListConfigs();
+    case "list_configs":      return toolListConfigs(ctx);
     default: return { ok: false, error: `unknown tool: ${name}` };
   }
 }
@@ -362,12 +374,12 @@ function toolUpdateGraph(input, ctx) {
 }
 
 async function toolListTriggers(ctx) {
-  const params = [];
-  let where = "";
-  if (ctx.graphId) { params.push(ctx.graphId); where = "WHERE graph_id=$1"; }
+  const params = [ctx.workspaceId];
+  const where = ["workspace_id = $1"];
+  if (ctx.graphId) { params.push(ctx.graphId); where.push(`graph_id=$${params.length}`); }
   const { rows } = await pool.query(
     `SELECT id, name, graph_id, type, config, enabled, fire_count, last_fired_at
-       FROM triggers ${where}
+       FROM triggers WHERE ${where.join(" AND ")}
        ORDER BY created_at DESC
        LIMIT 50`,
     params,
@@ -397,11 +409,20 @@ async function toolCreateTrigger(input, ctx) {
   } catch (e) {
     return { ok: false, error: `config did not validate: ${e.message}` };
   }
+  // Verify the target graph belongs to the caller's workspace before
+  // attaching a trigger to it.
+  const { rows: gs } = await pool.query(
+    "SELECT id FROM graphs WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL",
+    [ctx.graphId, ctx.workspaceId],
+  );
+  if (gs.length === 0) {
+    return { ok: false, error: "graph not found in this workspace" };
+  }
   const id = uuid();
   await pool.query(
-    `INSERT INTO triggers (id, name, graph_id, type, config, enabled)
-     VALUES ($1,$2,$3,$4,$5,true)`,
-    [id, name, ctx.graphId, type, JSON.stringify(triggerCfg || {})],
+    `INSERT INTO triggers (id, name, graph_id, type, config, enabled, workspace_id)
+     VALUES ($1,$2,$3,$4,$5,true,$6)`,
+    [id, name, ctx.graphId, type, JSON.stringify(triggerCfg || {}), ctx.workspaceId],
   );
   await syncTrigger(id);
   ctx.triggerCreated = { id, name, type };
@@ -412,9 +433,10 @@ async function toolCreateTrigger(input, ctx) {
   };
 }
 
-async function toolListConfigs() {
+async function toolListConfigs(ctx) {
   const { rows } = await pool.query(
-    `SELECT name, type, description FROM configs ORDER BY name`,
+    `SELECT name, type, description FROM configs WHERE workspace_id=$1 ORDER BY name`,
+    [ctx.workspaceId],
   );
   return { ok: true, configs: rows };
 }

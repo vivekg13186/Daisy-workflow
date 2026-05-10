@@ -3,14 +3,27 @@ import { pool } from "../db/pool.js";
 import { NotFoundError, ValidationError } from "../utils/errors.js";
 import { enqueueExecution } from "../queue/queue.js";
 import { resetNodeForReplay, upsertNodeState } from "../engine/nodeStateStore.js";
+import { requireUser, requireRole } from "../middleware/auth.js";
 
 const router = Router();
 
-router.get("/", async (req, res, next) => {
+// Auth model:
+//   • Reads (list/get)                       — admin, editor, viewer.
+//   • Mutations (resume/skip/respond/delete) — admin, editor.
+//                                              Viewers can read but not
+//                                              steer in-flight runs.
+//   • Workspace scoping                      — every query carries
+//                                              workspace_id of the
+//                                              caller; node_states is
+//                                              gated through its
+//                                              parent execution.
+router.use(requireUser);
+
+router.get("/", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
     const { graphId, status, limit = 50 } = req.query;
-    const params = [];
-    const where = [];
+    const params = [req.user.workspaceId];        // $1 — always present
+    const where = ["e.workspace_id = $1"];
     if (graphId) {
       params.push(graphId);
       where.push(`graph_id=$${params.length}`);
@@ -27,7 +40,7 @@ router.get("/", async (req, res, next) => {
       }
     }
     params.push(Math.min(parseInt(limit, 10) || 50, 200));
-    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const whereSql = `WHERE ${where.join(" AND ")}`;
     // graphs lost its `version` column when the schema flipped to single-row
     // workflows (migration 008). The Inspector formats the workflow column
     // from `graph_name` only now; if anything else still expects
@@ -45,10 +58,11 @@ router.get("/", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.get("/:id", async (req, res, next) => {
+router.get("/:id", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
   try {
     const { rows: execs } = await pool.query(
-      "SELECT * FROM executions WHERE id=$1", [req.params.id],
+      "SELECT * FROM executions WHERE id=$1 AND workspace_id=$2",
+      [req.params.id, req.user.workspaceId],
     );
     if (execs.length === 0) throw new NotFoundError("execution");
 
@@ -101,10 +115,11 @@ router.get("/:id", async (req, res, next) => {
  *   4. Re-enqueues the same executionId. The worker detects resume mode by
  *      finding existing node_states rows.
  */
-router.post("/:id/resume", async (req, res, next) => {
+router.post("/:id/resume", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      "SELECT id, graph_id, status FROM executions WHERE id=$1", [req.params.id],
+      "SELECT id, graph_id, status FROM executions WHERE id=$1 AND workspace_id=$2",
+      [req.params.id, req.user.workspaceId],
     );
     if (rows.length === 0) throw new NotFoundError("execution");
     const exec = rows[0];
@@ -173,13 +188,14 @@ router.post("/:id/resume", async (req, res, next) => {
  * decides the failed step isn't required — e.g. a flaky email send that
  * shouldn't block the rest of the workflow.
  */
-router.post("/:id/skip", async (req, res, next) => {
+router.post("/:id/skip", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const node = req.body?.node;
     if (!node) throw new ValidationError("body.node is required");
 
     const { rows } = await pool.query(
-      "SELECT id, graph_id, status FROM executions WHERE id=$1", [req.params.id],
+      "SELECT id, graph_id, status FROM executions WHERE id=$1 AND workspace_id=$2",
+      [req.params.id, req.user.workspaceId],
     );
     if (rows.length === 0) throw new NotFoundError("execution");
     const exec = rows[0];
@@ -217,7 +233,7 @@ router.post("/:id/skip", async (req, res, next) => {
  * responses to nodes that aren't currently waiting (e.g. already
  * resumed, never waited, or the execution itself was deleted).
  */
-router.post("/:id/nodes/:nodeName/respond", async (req, res, next) => {
+router.post("/:id/nodes/:nodeName/respond", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { id, nodeName } = req.params;
     const body = req.body;
@@ -226,7 +242,8 @@ router.post("/:id/nodes/:nodeName/respond", async (req, res, next) => {
       : body;
 
     const { rows: execs } = await pool.query(
-      "SELECT id, graph_id, status FROM executions WHERE id=$1", [id],
+      "SELECT id, graph_id, status FROM executions WHERE id=$1 AND workspace_id=$2",
+      [id, req.user.workspaceId],
     );
     if (execs.length === 0) throw new NotFoundError("execution");
     const exec = execs[0];
@@ -264,10 +281,11 @@ router.post("/:id/nodes/:nodeName/respond", async (req, res, next) => {
 });
 
 /** DELETE /executions/:id — remove an execution row. */
-router.delete("/:id", async (req, res, next) => {
+router.delete("/:id", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { rowCount } = await pool.query(
-      "DELETE FROM executions WHERE id=$1", [req.params.id],
+      "DELETE FROM executions WHERE id=$1 AND workspace_id=$2",
+      [req.params.id, req.user.workspaceId],
     );
     if (rowCount === 0) throw new NotFoundError("execution");
     res.status(200).json({ ok: true, id: req.params.id, deleted: "execution" });

@@ -121,14 +121,16 @@ async function processExecutionBody(job, span) {
   // Pull the user-supplied JSON input that was stashed when the execution row
   // was created. It overlays parsed.data and is exposed as ${data.*} / ${input.*}.
   // (Older rows may only have it in `context`; fall back if `inputs` is empty.)
+  // Also pull workspace_id so we can scope config + memory loads to it.
   const { rows: ctxRows } = await pool.query(
-    "SELECT inputs, context FROM executions WHERE id=$1", [executionId],
+    "SELECT inputs, context, workspace_id FROM executions WHERE id=$1", [executionId],
   );
   const inputsRow = ctxRows[0]?.inputs;
   const userContext =
     (inputsRow && (Array.isArray(inputsRow) || Object.keys(inputsRow).length > 0))
       ? inputsRow
       : (ctxRows[0]?.context || {});
+  const workspaceId = ctxRows[0]?.workspace_id || null;
 
   // Batch mode: if the user-supplied input is { items: [...] } OR a bare array,
   // run the whole DAG once per item. Otherwise treat it as a single-run object.
@@ -146,7 +148,7 @@ async function processExecutionBody(job, span) {
   //                                     env-var-flavoured access
   // Failure to load configs (DB down, missing table) leaves both as empty
   // objects so the rest of the run can still proceed.
-  const configsMap = await loadConfigsMap().catch((e) => {
+  const configsMap = await loadConfigsMap(workspaceId).catch((e) => {
     log.warn("configs load failed; continuing with empty config", { error: e.message });
     return {};
   });
@@ -157,17 +159,19 @@ async function processExecutionBody(job, span) {
   // expressions can read stored values via ${memory.<key>} without
   // hitting the DB per call. Stripped from persisted ctx below (same
   // treatment as ctx.config / ctx.env).
-  initialData.memory = await loadKvForScope({
-    scope: "workflow", scopeId: graphId, namespace: "kv",
-  }).catch((e) => {
-    log.warn("memory load failed; continuing with empty memory", { error: e.message });
-    return {};
-  });
+  initialData.memory = workspaceId
+    ? await loadKvForScope({
+        workspaceId, scope: "workflow", scopeId: graphId, namespace: "kv",
+      }).catch((e) => {
+        log.warn("memory load failed; continuing with empty memory", { error: e.message });
+        return {};
+      })
+    : {};
 
   // Identity so plugins (e.g. memory plugins, the agent's history
   // helpers) know which workflow they're running under without
   // poking back at the queue payload.
-  initialData.execution = { id: executionId, graphId };
+  initialData.execution = { id: executionId, graphId, workspaceId };
 
   // Spawn-chain tracking for workflow.fire. Each fire pushes the parent
   // graph_id onto this list before enqueueing the child; the child

@@ -29,10 +29,11 @@ export default {
 
   async execute(input, ctx) {
     const deleted = await deleteKv({
-      scope:     "workflow",
-      scopeId:   ctx?.execution?.graphId || null,
-      namespace: input.namespace || "kv",
-      key:       input.key,
+      workspaceId: ctx?.execution?.workspaceId,
+      scope:       "workflow",
+      scopeId:     ctx?.execution?.graphId || null,
+      namespace:   input.namespace || "kv",
+      key:         input.key,
     });
     return { key: input.key, deleted };
   },

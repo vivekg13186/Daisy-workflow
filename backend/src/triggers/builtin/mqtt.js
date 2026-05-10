@@ -43,12 +43,12 @@ export default {
     },
   },
 
-  async subscribe(config, onFire) {
+  async subscribe(config, onFire, ctx = {}) {
     if (!config?.config) {
       throw new Error("mqtt trigger: `config` is required (name of a stored mqtt configuration)");
     }
 
-    const configsMap = await loadConfigsMap();
+    const configsMap = await loadConfigsMap(ctx.workspaceId);
     const cfg = configsMap[config.config];
     if (!cfg) {
       throw new Error(

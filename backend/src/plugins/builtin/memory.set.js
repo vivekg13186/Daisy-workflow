@@ -36,10 +36,11 @@ export default {
     // value=undefined → store JSON null, so the row exists but reads back as null.
     const value = input.value === undefined ? null : input.value;
     await setKv({
-      scope:     "workflow",
-      scopeId:   ctx?.execution?.graphId || null,
-      namespace: input.namespace || "kv",
-      key:       input.key,
+      workspaceId: ctx?.execution?.workspaceId,
+      scope:       "workflow",
+      scopeId:     ctx?.execution?.graphId || null,
+      namespace:   input.namespace || "kv",
+      key:         input.key,
       value,
     });
     return { key: input.key, value };

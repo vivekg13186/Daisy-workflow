@@ -91,16 +91,26 @@ export default {
       );
     }
 
-    // Verify the target workflow exists and isn't soft-deleted before
-    // we allocate an execution row.
+    // Verify the target workflow exists, isn't soft-deleted, AND lives
+    // in the same workspace as the parent. Cross-workspace spawns are
+    // refused — that boundary is the whole point of multi-tenancy.
+    const parentWorkspaceId = ctx?.execution?.workspaceId || null;
     const { rows } = await pool.query(
-      "SELECT id, name FROM graphs WHERE id=$1 AND deleted_at IS NULL",
+      `SELECT id, name, workspace_id FROM graphs
+        WHERE id=$1 AND deleted_at IS NULL`,
       [input.workflowId],
     );
     if (rows.length === 0) {
       throw new Error(`workflow.fire: workflow ${input.workflowId} not found or deleted`);
     }
-    const childName = rows[0].name;
+    const childName        = rows[0].name;
+    const childWorkspaceId = rows[0].workspace_id;
+    if (parentWorkspaceId && childWorkspaceId !== parentWorkspaceId) {
+      throw new Error(
+        `workflow.fire: workflow ${input.workflowId} lives in a different ` +
+        `workspace and cannot be spawned from this run.`,
+      );
+    }
 
     // Allocate the child execution row + enqueue. Same shape that
     // /graphs/:id/execute uses, plus the `_ancestors` list so nested
@@ -108,9 +118,9 @@ export default {
     const childId    = uuid();
     const childInput = (input.input && typeof input.input === "object") ? input.input : {};
     await pool.query(
-      `INSERT INTO executions (id, graph_id, status, inputs, context)
-       VALUES ($1,$2,'queued',$3,'{}'::jsonb)`,
-      [childId, input.workflowId, JSON.stringify(childInput)],
+      `INSERT INTO executions (id, graph_id, status, inputs, context, workspace_id)
+       VALUES ($1,$2,'queued',$3,'{}'::jsonb,$4)`,
+      [childId, input.workflowId, JSON.stringify(childInput), childWorkspaceId],
     );
 
     // Build the new ancestors list. The current execution's graphId is

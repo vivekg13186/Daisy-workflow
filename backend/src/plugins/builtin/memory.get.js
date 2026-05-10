@@ -32,10 +32,11 @@ export default {
 
   async execute(input, ctx) {
     const value = await getKv({
-      scope:     "workflow",
-      scopeId:   ctx?.execution?.graphId || null,
-      namespace: input.namespace || "kv",
-      key:       input.key,
+      workspaceId: ctx?.execution?.workspaceId,
+      scope:       "workflow",
+      scopeId:     ctx?.execution?.graphId || null,
+      namespace:   input.namespace || "kv",
+      key:         input.key,
     });
     return { value, key: input.key };
   },

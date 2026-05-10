@@ -32,8 +32,20 @@ import {
   decryptSecrets,
   maskSecrets,
 } from "../configs/registry.js";
+import { requireUser, requireRole } from "../middleware/auth.js";
 
 const router = Router();
+
+// Auth model:
+//   • Reads (list/get/types)     — admin + editor (editor needs them
+//                                   to wire configs into graph nodes;
+//                                   viewer doesn't edit so omitted).
+//   • Writes (create/update/rotate/delete) — admin only. Configs hold
+//                                   credentials; only an admin should
+//                                   be able to create or rotate them.
+//   • Workspace scoping          — every query carries
+//                                   workspace_id = req.user.workspaceId.
+router.use(requireUser);
 
 // Names share the same identifier rules we use for graph nodes — they're
 // how a config is referenced from a DSL expression (${config.<name>.<key>}),
@@ -43,19 +55,21 @@ const NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 // ──────────────────────────────────────────────────────────────────────────
 // Type registry — drives the frontend ConfigDesigner UI.
 // ──────────────────────────────────────────────────────────────────────────
-router.get("/types", (_req, res) => {
+router.get("/types", requireRole("admin", "editor"), (_req, res) => {
   res.json(listTypes());
 });
 
 // ──────────────────────────────────────────────────────────────────────────
 // List — secrets masked.
 // ──────────────────────────────────────────────────────────────────────────
-router.get("/", async (_req, res, next) => {
+router.get("/", requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       `SELECT id, name, type, description, data, created_at, updated_at
        FROM configs
-       ORDER BY name`
+       WHERE workspace_id = $1
+       ORDER BY name`,
+      [req.user.workspaceId],
     );
     res.json(rows.map(r => ({
       ...r,
@@ -67,9 +81,12 @@ router.get("/", async (_req, res, next) => {
 // ──────────────────────────────────────────────────────────────────────────
 // Get one — secrets masked. Use update flow to "rotate" a secret.
 // ──────────────────────────────────────────────────────────────────────────
-router.get("/:id", async (req, res, next) => {
+router.get("/:id", requireRole("admin", "editor"), async (req, res, next) => {
   try {
-    const { rows } = await pool.query("SELECT * FROM configs WHERE id=$1", [req.params.id]);
+    const { rows } = await pool.query(
+      "SELECT * FROM configs WHERE id=$1 AND workspace_id=$2",
+      [req.params.id, req.user.workspaceId],
+    );
     if (rows.length === 0) throw new NotFoundError("config");
     const row = rows[0];
     res.json({ ...row, data: maskSecrets(row.type, row.data) });
@@ -79,7 +96,7 @@ router.get("/:id", async (req, res, next) => {
 // ──────────────────────────────────────────────────────────────────────────
 // Create
 // ──────────────────────────────────────────────────────────────────────────
-router.post("/", async (req, res, next) => {
+router.post("/", requireRole("admin"), async (req, res, next) => {
   try {
     const { name, type, description = "", data = {} } = req.body || {};
     if (!name) throw new ValidationError("name required");
@@ -100,9 +117,9 @@ router.post("/", async (req, res, next) => {
     const id = uuid();
     try {
       await pool.query(
-        `INSERT INTO configs (id, name, type, description, data, encryption_version, kek_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [id, name, type, description || "", JSON.stringify(stored), encryption_version, kek_id],
+        `INSERT INTO configs (id, name, type, description, data, encryption_version, kek_id, workspace_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [id, name, type, description || "", JSON.stringify(stored), encryption_version, kek_id, req.user.workspaceId],
       );
     } catch (e) {
       if (e.code === "23505") throw new ValidationError(`config name "${name}" already exists`);
@@ -120,11 +137,14 @@ router.post("/", async (req, res, next) => {
 // field means "keep the existing secret". Sending any other string for a
 // secret field rotates it.
 // ──────────────────────────────────────────────────────────────────────────
-router.put("/:id", async (req, res, next) => {
+router.put("/:id", requireRole("admin"), async (req, res, next) => {
   try {
     const { name, description, data } = req.body || {};
 
-    const { rows } = await pool.query("SELECT * FROM configs WHERE id=$1", [req.params.id]);
+    const { rows } = await pool.query(
+      "SELECT * FROM configs WHERE id=$1 AND workspace_id=$2",
+      [req.params.id, req.user.workspaceId],
+    );
     if (rows.length === 0) throw new NotFoundError("config");
     const existing = rows[0];
 
@@ -157,10 +177,14 @@ router.put("/:id", async (req, res, next) => {
     }
     if (sets.length === 0) return res.json({ id: req.params.id, updated: false });
     params.push(req.params.id);
+    const idIdx = params.length;
+    params.push(req.user.workspaceId);
+    const wsIdx = params.length;
     sets.push("updated_at = NOW()");
     try {
       await pool.query(
-        `UPDATE configs SET ${sets.join(", ")} WHERE id = $${params.length}`, params,
+        `UPDATE configs SET ${sets.join(", ")} WHERE id = $${idIdx} AND workspace_id = $${wsIdx}`,
+        params,
       );
     } catch (e) {
       if (e.code === "23505") throw new ValidationError(`config name "${name}" already exists`);
@@ -189,9 +213,12 @@ router.put("/:id", async (req, res, next) => {
 // version mapping internally; on AWS, automatic annual KEK rotation
 // is a one-checkbox setting).
 // ──────────────────────────────────────────────────────────────────────────
-router.post("/:id/rotate", async (req, res, next) => {
+router.post("/:id/rotate", requireRole("admin"), async (req, res, next) => {
   try {
-    const { rows } = await pool.query("SELECT * FROM configs WHERE id=$1", [req.params.id]);
+    const { rows } = await pool.query(
+      "SELECT * FROM configs WHERE id=$1 AND workspace_id=$2",
+      [req.params.id, req.user.workspaceId],
+    );
     if (rows.length === 0) throw new NotFoundError("config");
     const existing = rows[0];
 
@@ -213,8 +240,8 @@ router.post("/:id/rotate", async (req, res, next) => {
               encryption_version = $3,
               kek_id = $4,
               updated_at = NOW()
-        WHERE id = $1`,
-      [existing.id, JSON.stringify(stored), encryption_version, kek_id],
+        WHERE id = $1 AND workspace_id = $5`,
+      [existing.id, JSON.stringify(stored), encryption_version, kek_id, req.user.workspaceId],
     );
     res.json({
       id: existing.id,
@@ -229,9 +256,12 @@ router.post("/:id/rotate", async (req, res, next) => {
 // ──────────────────────────────────────────────────────────────────────────
 // Delete
 // ──────────────────────────────────────────────────────────────────────────
-router.delete("/:id", async (req, res, next) => {
+router.delete("/:id", requireRole("admin"), async (req, res, next) => {
   try {
-    const { rowCount } = await pool.query("DELETE FROM configs WHERE id=$1", [req.params.id]);
+    const { rowCount } = await pool.query(
+      "DELETE FROM configs WHERE id=$1 AND workspace_id=$2",
+      [req.params.id, req.user.workspaceId],
+    );
     if (rowCount === 0) throw new NotFoundError("config");
     res.status(200).json({ ok: true, id: req.params.id, deleted: "config" });
   } catch (e) { next(e); }

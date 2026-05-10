@@ -63,11 +63,18 @@ async function startOne(row) {
   // user can wire e.g. an MQTT trigger to a stored broker config instead of
   // re-typing host/credentials in every trigger. We resolve the expressions
   // up-front and hand the driver a fully-substituted config blob.
-  const resolvedConfig = await resolveTriggerConfig(row.config);
+  // Configs are scoped to the trigger's workspace so a config in one
+  // workspace can't leak into another's trigger.
+  const resolvedConfig = await resolveTriggerConfig(row.config, row.workspace_id);
   const onFire = (payload) => fireTrigger(row, payload).catch(e => {
     log.warn("trigger fire failed", { id: row.id, error: e.message });
   });
-  const subscription = await triggerRegistry.subscribe(row.type, resolvedConfig, onFire);
+  const subscription = await triggerRegistry.subscribe(
+    row.type,
+    resolvedConfig,
+    onFire,
+    { workspaceId: row.workspace_id, triggerId: row.id, graphId: row.graph_id },
+  );
   active.set(row.id, { row, subscription, lastError: null });
   await pool.query("UPDATE triggers SET last_error=NULL, updated_at=NOW() WHERE id=$1", [row.id]);
   log.info("trigger started", { id: row.id, type: row.type, name: row.name });
@@ -82,10 +89,10 @@ async function startOne(row) {
  * driver will then surface a more specific error if the missing field
  * mattered.
  */
-async function resolveTriggerConfig(config) {
+async function resolveTriggerConfig(config, workspaceId) {
   if (!config || typeof config !== "object") return config;
   let configsMap;
-  try { configsMap = await loadConfigsMap(); }
+  try { configsMap = await loadConfigsMap(workspaceId); }
   catch (e) {
     log.warn("trigger config resolve: configs load failed", { error: e.message });
     return config;
@@ -107,13 +114,15 @@ async function stopOne(triggerId) {
   log.info("trigger stopped", { id: triggerId });
 }
 
-/** Insert an execution row (status=queued, inputs=payload) and enqueue it. */
+/** Insert an execution row (status=queued, inputs=payload) and enqueue it.
+ *  Inherits the trigger's workspace_id onto the execution row so every
+ *  downstream lookup (configs, memory, listing) stays scoped. */
 async function fireTrigger(row, payload) {
   const execId = uuid();
   await pool.query(
-    `INSERT INTO executions (id, graph_id, status, inputs, context)
-     VALUES ($1,$2,'queued',$3,'{}'::jsonb)`,
-    [execId, row.graph_id, JSON.stringify(payload)],
+    `INSERT INTO executions (id, graph_id, status, inputs, context, workspace_id)
+     VALUES ($1,$2,'queued',$3,'{}'::jsonb,$4)`,
+    [execId, row.graph_id, JSON.stringify(payload), row.workspace_id],
   );
   await pool.query(
     `UPDATE triggers

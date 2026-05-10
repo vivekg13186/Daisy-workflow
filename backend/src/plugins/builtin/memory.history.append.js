@@ -37,6 +37,7 @@ export default {
 
   async execute(input, ctx) {
     await appendHistory({
+      workspaceId:    ctx?.execution?.workspaceId,
       scope:          "workflow",
       scopeId:        ctx?.execution?.graphId || null,
       conversationId: input.conversationId,

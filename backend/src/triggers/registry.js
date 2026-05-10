@@ -58,13 +58,16 @@ class TriggerRegistry {
     }
   }
 
-  async subscribe(type, config, onFire) {
+  async subscribe(type, config, onFire, ctx = {}) {
     const p = this.get(type);
     if (p.validateConfig && !p.validateConfig(config)) {
       const errs = p.validateConfig.errors.map(e => `${e.instancePath} ${e.message}`).join("; ");
       throw new Error(`Trigger "${type}" config invalid: ${errs}`);
     }
-    return p.subscribe(config, onFire);
+    // ctx is passed through to drivers as a third argument so they can
+    // resolve workspace-scoped lookups (configs etc.). New drivers
+    // accept (config, onFire, ctx); legacy two-arg drivers still work.
+    return p.subscribe(config, onFire, ctx);
   }
 }
 

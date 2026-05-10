@@ -21,14 +21,28 @@ import { decryptSecrets } from "./registry.js";
 import { log } from "../utils/logger.js";
 
 /**
- * Load every config row, decrypt secret fields, and return as a map keyed
- * by config `name`. Errors on individual rows are logged and that row is
- * skipped — one broken config shouldn't stop the run.
+ * Load configs scoped to a single workspace, decrypt secret fields,
+ * and return as a map keyed by config `name`. Errors on individual
+ * rows are logged and that row is skipped — one broken config
+ * shouldn't stop the run.
+ *
+ * `workspaceId` is required as of PR 2 (auth + multi-tenancy). The
+ * engine, the trigger manager, and any other caller passes the
+ * execution's owning workspace; if the param is omitted the function
+ * returns an empty map and logs a warning rather than leaking every
+ * workspace's configs into ctx.config.
  */
-export async function loadConfigsMap() {
+export async function loadConfigsMap(workspaceId) {
   const out = {};
+  if (!workspaceId) {
+    log.warn("loadConfigsMap called without workspaceId — returning empty map");
+    return out;
+  }
   try {
-    const { rows } = await pool.query("SELECT name, type, data FROM configs");
+    const { rows } = await pool.query(
+      "SELECT name, type, data FROM configs WHERE workspace_id = $1",
+      [workspaceId],
+    );
     // Decrypt all rows in parallel — each KMS call is ~10ms, and we
     // do this once per execution so even at 50 configs the wall-clock
     // cost is dominated by the slowest single call. With the default

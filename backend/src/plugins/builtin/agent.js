@@ -112,11 +112,13 @@ export default {
     const storeNew      = input.storeConversation !== false;
     const historyLimit  = input.historyLimit ?? 20;
     const scopeId       = ctx?.execution?.graphId || null;
+    const workspaceId   = ctx?.execution?.workspaceId;
 
     // Memory load: pull prior turns into a `messages` array. Empty when
     // conversationId is unset or historyLimit is 0.
-    const history = (convId && historyLimit > 0)
+    const history = (convId && historyLimit > 0 && workspaceId)
       ? await loadHistory({
+          workspaceId,
           scope:          "workflow",
           scopeId,
           conversationId: convId,
@@ -145,14 +147,16 @@ export default {
     // Memory store: if conversationId is set AND storeConversation is true,
     // append both turns. Two rows so a future load reconstructs the
     // exchange in order.
-    if (convId && storeNew) {
+    if (convId && storeNew && workspaceId) {
       try {
         await appendHistory({
+          workspaceId,
           scope: "workflow", scopeId,
           conversationId: convId,
           role: "user", content: userText,
         });
         await appendHistory({
+          workspaceId,
           scope: "workflow", scopeId,
           conversationId: convId,
           role: "assistant", content: text,

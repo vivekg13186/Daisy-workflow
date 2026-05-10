@@ -2,25 +2,43 @@
 // history. One Postgres table (`memories`), two namespaces ('kv' and
 // 'history'), discriminated by a nullable `seq` column.
 //
-// Helpers here are intentionally thin — each maps to one or two SQL
-// statements, with the JSON parsing handled by the pg driver.
+// Workspace scoping (PR 2):
+//   Every helper now requires a `workspaceId`. Reads filter by it;
+//   writes set it. The unique index from migration 012 still uses
+//   (scope, scope_id, namespace, key) — workspace_id doesn't need to
+//   participate in the uniqueness constraint because in practice
+//   scope_id (a graph UUID or similar) is globally unique. The
+//   workspace_id column gives us the additional safety net of "this
+//   tenant can never see another tenant's memory" without changing
+//   the conflict semantics.
 
 import { v4 as uuid } from "uuid";
 import { pool } from "../db/pool.js";
+
+function requireWs(workspaceId) {
+  if (!workspaceId) {
+    throw new Error("memoryStore: workspaceId is required");
+  }
+  return workspaceId;
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // KV (Layer 1)
 // ──────────────────────────────────────────────────────────────────────
 
 /** Read a single KV value. Returns null if the row doesn't exist. */
-export async function getKv({ scope = "workflow", scopeId, namespace = "kv", key }) {
+export async function getKv({
+  workspaceId, scope = "workflow", scopeId, namespace = "kv", key,
+}) {
+  requireWs(workspaceId);
   const { rows } = await pool.query(
     `SELECT value FROM memories
-       WHERE scope=$1
+       WHERE workspace_id=$5
+         AND scope=$1
          AND COALESCE(scope_id,'00000000-0000-0000-0000-000000000000'::uuid)
              = COALESCE($2::uuid,'00000000-0000-0000-0000-000000000000'::uuid)
          AND namespace=$3 AND key=$4 AND seq IS NULL`,
-    [scope, scopeId || null, namespace, key],
+    [scope, scopeId || null, namespace, key, workspaceId],
   );
   return rows[0]?.value ?? null;
 }
@@ -34,10 +52,13 @@ export async function getKv({ scope = "workflow", scopeId, namespace = "kv", key
  * key). Postgres requires index_expression entries to be wrapped in
  * an extra set of parentheses.
  */
-export async function setKv({ scope = "workflow", scopeId, namespace = "kv", key, value }) {
+export async function setKv({
+  workspaceId, scope = "workflow", scopeId, namespace = "kv", key, value,
+}) {
+  requireWs(workspaceId);
   await pool.query(
-    `INSERT INTO memories (id, scope, scope_id, namespace, key, seq, value)
-       VALUES ($1, $2, $3, $4, $5, NULL, $6::jsonb)
+    `INSERT INTO memories (id, scope, scope_id, namespace, key, seq, value, workspace_id)
+       VALUES ($1, $2, $3, $4, $5, NULL, $6::jsonb, $7)
      ON CONFLICT (
        scope,
        (COALESCE(scope_id,'00000000-0000-0000-0000-000000000000'::uuid)),
@@ -45,7 +66,7 @@ export async function setKv({ scope = "workflow", scopeId, namespace = "kv", key
        key
      ) WHERE seq IS NULL
      DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-    [uuid(), scope, scopeId || null, namespace, key, JSON.stringify(value)],
+    [uuid(), scope, scopeId || null, namespace, key, JSON.stringify(value), workspaceId],
   );
 }
 
@@ -55,22 +76,28 @@ export async function setKv({ scope = "workflow", scopeId, namespace = "kv", key
  * value is an array, we push; otherwise we replace with `[item]` (the
  * caller signalled "I want this to be a list" by calling append).
  */
-export async function appendKv({ scope = "workflow", scopeId, namespace = "kv", key, item }) {
-  const cur = await getKv({ scope, scopeId, namespace, key });
+export async function appendKv({
+  workspaceId, scope = "workflow", scopeId, namespace = "kv", key, item,
+}) {
+  const cur = await getKv({ workspaceId, scope, scopeId, namespace, key });
   const next = Array.isArray(cur) ? [...cur, item] : [item];
-  await setKv({ scope, scopeId, namespace, key, value: next });
+  await setKv({ workspaceId, scope, scopeId, namespace, key, value: next });
   return next.length;
 }
 
 /** Delete a single KV row. Returns true if a row was removed. */
-export async function deleteKv({ scope = "workflow", scopeId, namespace = "kv", key }) {
+export async function deleteKv({
+  workspaceId, scope = "workflow", scopeId, namespace = "kv", key,
+}) {
+  requireWs(workspaceId);
   const { rowCount } = await pool.query(
     `DELETE FROM memories
-       WHERE scope=$1
+       WHERE workspace_id=$5
+         AND scope=$1
          AND COALESCE(scope_id,'00000000-0000-0000-0000-000000000000'::uuid)
              = COALESCE($2::uuid,'00000000-0000-0000-0000-000000000000'::uuid)
          AND namespace=$3 AND key=$4 AND seq IS NULL`,
-    [scope, scopeId || null, namespace, key],
+    [scope, scopeId || null, namespace, key, workspaceId],
   );
   return rowCount > 0;
 }
@@ -82,14 +109,18 @@ export async function deleteKv({ scope = "workflow", scopeId, namespace = "kv", 
  *
  * Returns a flat object { <key>: <value> }.
  */
-export async function loadKvForScope({ scope = "workflow", scopeId, namespace = "kv" }) {
+export async function loadKvForScope({
+  workspaceId, scope = "workflow", scopeId, namespace = "kv",
+}) {
+  requireWs(workspaceId);
   const { rows } = await pool.query(
     `SELECT key, value FROM memories
-       WHERE scope=$1
+       WHERE workspace_id=$4
+         AND scope=$1
          AND COALESCE(scope_id,'00000000-0000-0000-0000-000000000000'::uuid)
              = COALESCE($2::uuid,'00000000-0000-0000-0000-000000000000'::uuid)
          AND namespace=$3 AND seq IS NULL`,
-    [scope, scopeId || null, namespace],
+    [scope, scopeId || null, namespace, workspaceId],
   );
   const out = {};
   for (const r of rows) out[r.key] = r.value;
@@ -112,21 +143,25 @@ export async function loadKvForScope({ scope = "workflow", scopeId, namespace = 
  * without an explicit lock.
  */
 export async function appendHistory({
-  scope = "workflow", scopeId, conversationId, role, content,
+  workspaceId, scope = "workflow", scopeId, conversationId, role, content,
 }) {
+  requireWs(workspaceId);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       await pool.query(
-        `INSERT INTO memories (id, scope, scope_id, namespace, key, seq, value)
+        `INSERT INTO memories (id, scope, scope_id, namespace, key, seq, value, workspace_id)
          SELECT $1, $2, $3, 'history', $4,
                 COALESCE(MAX(seq), 0) + 1,
-                $5::jsonb
+                $5::jsonb,
+                $6
            FROM memories
-          WHERE scope=$2
+          WHERE workspace_id=$6
+            AND scope=$2
             AND COALESCE(scope_id,'00000000-0000-0000-0000-000000000000'::uuid)
                 = COALESCE($3::uuid,'00000000-0000-0000-0000-000000000000'::uuid)
             AND namespace='history' AND key=$4`,
-        [uuid(), scope, scopeId || null, conversationId, JSON.stringify({ role, content })],
+        [uuid(), scope, scopeId || null, conversationId,
+         JSON.stringify({ role, content }), workspaceId],
       );
       return;
     } catch (e) {
@@ -141,15 +176,17 @@ export async function appendHistory({
  * caller can pass the array straight to the LLM as `messages`).
  */
 export async function loadHistory({
-  scope = "workflow", scopeId, conversationId, limit = 20,
+  workspaceId, scope = "workflow", scopeId, conversationId, limit = 20,
 }) {
+  requireWs(workspaceId);
   const safeLimit = Math.max(0, Math.min(parseInt(limit, 10) || 0, 200));
   if (!safeLimit) return [];
   const { rows } = await pool.query(
     `WITH recent AS (
         SELECT seq, value
           FROM memories
-         WHERE scope=$1
+         WHERE workspace_id=$5
+           AND scope=$1
            AND COALESCE(scope_id,'00000000-0000-0000-0000-000000000000'::uuid)
                = COALESCE($2::uuid,'00000000-0000-0000-0000-000000000000'::uuid)
            AND namespace='history' AND key=$3
@@ -157,22 +194,24 @@ export async function loadHistory({
          LIMIT $4
      )
      SELECT value FROM recent ORDER BY seq ASC`,
-    [scope, scopeId || null, conversationId, safeLimit],
+    [scope, scopeId || null, conversationId, safeLimit, workspaceId],
   );
   return rows.map(r => r.value);
 }
 
 /** Delete every turn of a conversation. Returns the number of rows removed. */
 export async function clearHistory({
-  scope = "workflow", scopeId, conversationId,
+  workspaceId, scope = "workflow", scopeId, conversationId,
 }) {
+  requireWs(workspaceId);
   const { rowCount } = await pool.query(
     `DELETE FROM memories
-       WHERE scope=$1
+       WHERE workspace_id=$4
+         AND scope=$1
          AND COALESCE(scope_id,'00000000-0000-0000-0000-000000000000'::uuid)
              = COALESCE($2::uuid,'00000000-0000-0000-0000-000000000000'::uuid)
          AND namespace='history' AND key=$3`,
-    [scope, scopeId || null, conversationId],
+    [scope, scopeId || null, conversationId, workspaceId],
   );
   return rowCount;
 }
@@ -181,9 +220,12 @@ export async function clearHistory({
 // Generic listing — used by the REST endpoint.
 // ──────────────────────────────────────────────────────────────────────
 
-export async function listMemories({ scope, scopeId, namespace, prefix, limit = 200 }) {
-  const params = [];
-  const where = [];
+export async function listMemories({
+  workspaceId, scope, scopeId, namespace, prefix, limit = 200,
+}) {
+  requireWs(workspaceId);
+  const params = [workspaceId];
+  const where = [`workspace_id = $1`];
   if (scope)    { params.push(scope);            where.push(`scope = $${params.length}`); }
   if (scopeId)  { params.push(scopeId);          where.push(`scope_id = $${params.length}::uuid`); }
   if (namespace){ params.push(namespace);        where.push(`namespace = $${params.length}`); }
@@ -192,7 +234,7 @@ export async function listMemories({ scope, scopeId, namespace, prefix, limit = 
   const sql = `
     SELECT id, scope, scope_id, namespace, key, seq, value, created_at, updated_at
       FROM memories
-      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      WHERE ${where.join(" AND ")}
       ORDER BY scope, namespace, key, seq NULLS FIRST
       LIMIT $${params.length}`;
   const { rows } = await pool.query(sql, params);
