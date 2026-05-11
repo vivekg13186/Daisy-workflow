@@ -1,0 +1,46 @@
+{
+  "name": "reddit.search",
+  "version": "0.1.0",
+  "description": "Search public Reddit posts. Example external plugin demonstrating the HTTP transport contract.",
+  "author": "Daisy-DAG",
+  "engineMinVersion": "0.2.0",
+  "primaryOutput": "posts",
+  "inputSchema": {
+    "type": "object",
+    "required": ["query"],
+    "properties": {
+      "query":     { "type": "string", "title": "Query",     "minLength": 1 },
+      "subreddit": { "type": "string", "title": "Subreddit", "description": "Optional. Search within this subreddit." },
+      "limit":     { "type": "integer","title": "Limit",     "default": 10, "minimum": 1, "maximum": 100 },
+      "sort":      { "type": "string", "title": "Sort",      "enum": ["relevance","hot","top","new","comments"], "default": "relevance" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["posts", "count"],
+    "properties": {
+      "posts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id":         { "type": "string" },
+            "title":      { "type": "string" },
+            "url":        { "type": "string" },
+            "permalink":  { "type": "string" },
+            "subreddit":  { "type": "string" },
+            "score":      { "type": "integer" },
+            "comments":   { "type": "integer" },
+            "createdUtc": { "type": "integer" }
+          }
+        }
+      },
+      "count": { "type": "integer" }
+    }
+  },
+  "configRefs": [],
+  "ui": {
+    "category": "social",
+    "icon":     "reddit"
+  }
+}

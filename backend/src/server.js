@@ -11,7 +11,7 @@ import cookieParser from "cookie-parser";
 import { config } from "./config.js";
 import { log } from "./utils/logger.js";
 import { HttpError } from "./utils/errors.js";
-import { loadBuiltins } from "./plugins/registry.js";
+import { loadBuiltins, registry } from "./plugins/registry.js";
 import { readiness } from "./health/checks.js";
 import { limiters } from "./middleware/rateLimit.js";
 import authRouter from "./api/auth.js";
@@ -30,6 +30,7 @@ import memoryRouter  from "./api/memory.js";
 import { attachWss } from "./ws/broadcast.js";
 
 await loadBuiltins();
+await registry.loadAll();
 
 const app = express();
 // Cookie-aware CORS: when the frontend lives on a different origin

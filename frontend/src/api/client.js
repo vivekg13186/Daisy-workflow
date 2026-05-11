@@ -109,8 +109,46 @@ export const Executions = {
 };
 
 export const Plugins = {
-  // Returns [{ name, description, inputSchema, outputSchema }]
+  // List every plugin known to the engine (in-memory snapshot + DB
+  // metadata: enabled, source, transport, status). Open to any
+  // signed-in user (the FlowDesigner palette needs it).
   list: () => api.get("/plugins").then(r => r.data),
+
+  // Admin-only. Install an HTTP-transport plugin by pointing at its
+  // running container's /manifest endpoint.
+  //
+  //   payload = { endpoint, source? }
+  install: (payload) => api.post("/plugins/install", payload).then(r => r.data),
+
+  // Admin-only. Re-read the plugins table into the engine's
+  // in-memory registry. Useful after a direct DB edit or to pick
+  // up a freshly-installed plugin without a worker restart.
+  refresh:   ()     => api.post("/plugins/refresh").then(r => r.data),
+  enable:    (name) => api.post(`/plugins/${encodeURIComponent(name)}/enable`).then(r => r.data),
+  disable:   (name) => api.post(`/plugins/${encodeURIComponent(name)}/disable`).then(r => r.data),
+
+  // Phase 3 — uninstall a specific (name, version). Falls back to
+  // the legacy all-versions delete when no version is provided.
+  uninstall:        (name)          => api.delete(`/plugins/${encodeURIComponent(name)}`).then(r => r.data),
+  uninstallVersion: (name, version) =>
+    api.delete(`/plugins/${encodeURIComponent(name)}/${encodeURIComponent(version)}`).then(r => r.data),
+
+  setDefault: (name, version) =>
+    api.post(`/plugins/${encodeURIComponent(name)}/${encodeURIComponent(version)}/set-default`)
+       .then(r => r.data),
+
+  // Marketplace browse — fetches the catalog (cached on the server
+  // for 5 minutes; force=true bypasses).
+  catalog: ({ force = false } = {}) =>
+    api.get("/plugins/catalog", { params: force ? { refresh: 1 } : {} }).then(r => r.data),
+
+  // Install from a catalog entry. The catalog provides the manifest
+  // URL + (optionally) the SHA-256 the server verifies on download.
+  // `endpoint` is where the operator has the plugin container running.
+  installFromCatalog: ({ catalogEntryUrl, manifestUrl, manifestSha256, endpoint, source }) =>
+    api.post("/plugins/install-from-catalog", {
+      catalogEntryUrl, manifestUrl, manifestSha256, endpoint, source,
+    }).then(r => r.data),
 };
 
 export const AI = {

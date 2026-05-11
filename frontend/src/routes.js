@@ -21,6 +21,7 @@ import AgentDesigner  from "./pages/AgentDesigner.vue";
 import LoginPage      from "./pages/LoginPage.vue";
 import UsersPage      from "./pages/UsersPage.vue";
 import AuditPage      from "./pages/AuditPage.vue";
+import PluginsPage    from "./pages/PluginsPage.vue";
 import WorkspaceSettings from "./pages/WorkspaceSettings.vue";
 import PropertyEditor from "./components/PropertyEditor.vue";
 
@@ -52,6 +53,8 @@ const routes = [
   { path: "/users",                  component: UsersPage,         name: "users",
     meta: { roles: ["admin"] } },
   { path: "/audit",                  component: AuditPage,         name: "audit",
+    meta: { roles: ["admin"] } },
+  { path: "/plugins",                component: PluginsPage,       name: "plugins",
     meta: { roles: ["admin"] } },
   { path: "/workspace",              component: WorkspaceSettings, name: "workspace" },
 ];

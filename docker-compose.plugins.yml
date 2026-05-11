@@ -1,0 +1,51 @@
+# External-plugin overlay.
+#
+# Bring up Daisy + every plugin that ships in plugins-external/ in one
+# command:
+#
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.plugins.yml \
+#     --profile full \
+#     up -d
+#
+# Daisy itself doesn't auto-discover these containers — you have to
+# install each one once via the admin UI (or `npm run install-plugin
+# -- --endpoint http://reddit-plugin:8080`). After that the plugin
+# row lives in DB and survives restarts; the worker picks it up at
+# boot via registry.loadAll().
+#
+# Adding more plugins:
+#   1. Drop the plugin source under plugins-external/<name>/.
+#   2. Add a service block here pointing at its Dockerfile.
+#   3. After `up -d`, run `npm run install-plugin -- --endpoint http://<name>-plugin:8080`.
+#
+# Plugins share the same internal docker network as the backend; the
+# install endpoint URL uses the container name, e.g.
+# `http://reddit-plugin:8080`.
+
+services:
+  reddit-plugin:
+    profiles: ["full"]
+    build:
+      # Repo root so plugin-sdk/ is reachable during npm install
+      # (the package.json's "file:../../plugin-sdk" dependency
+      # would otherwise fail with "Cannot read path outside build
+      # context").
+      context: .
+      dockerfile: plugins-external/reddit/Dockerfile
+    container_name: daisy-plugin-reddit
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      REDDIT_USER_AGENT: "daisy-dag/0.2 (+plugin reddit.search)"
+    # Internal-only by default. Uncomment to expose for browser
+    # testing on the host.
+    # ports:
+    #   - "8081:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

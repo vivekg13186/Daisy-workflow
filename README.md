@@ -24,13 +24,6 @@ Each workflow is defined using a simple YAML-based DSL, can be visually designed
 
 ## Features
 
-### Engine
-- Durable Execution - resume or skip on failure
-- Human in loop - node wait for user to approve
-- Stream support
-- Multi Agent with memory sharing
-- 
-
 
 ### Triggers
 - Email (SMTP)

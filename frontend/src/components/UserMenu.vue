@@ -75,6 +75,10 @@
             <q-item-section avatar><q-icon name="history" /></q-item-section>
             <q-item-section>Audit log</q-item-section>
           </q-item>
+          <q-item v-if="auth.user.role === 'admin'" clickable v-close-popup @click="goPlugins">
+            <q-item-section avatar><q-icon name="extension" /></q-item-section>
+            <q-item-section>Plugins</q-item-section>
+          </q-item>
 
           <q-separator />
 
@@ -140,6 +144,7 @@ async function onSwitchWorkspace(w) {
 
 function goUsers()      { router.push({ name: "users" }); }
 function goAudit()      { router.push({ name: "audit" }); }
+function goPlugins()    { router.push({ name: "plugins" }); }
 function goWorkspace()  { router.push({ name: "workspace" }); }
 
 async function onLogout() {

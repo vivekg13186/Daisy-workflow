@@ -11,7 +11,8 @@ import { pool } from "./db/pool.js";
 import { parseDag } from "./dsl/parser.js";
 import { executeDag } from "./engine/executor.js";
 import { executeBatch } from "./engine/batch.js";
-import { loadBuiltins } from "./plugins/registry.js";
+import { loadBuiltins, registry } from "./plugins/registry.js";
+import { startHealthcheck, stopHealthcheck } from "./plugins/healthcheck.js";
 import { publish } from "./ws/broadcast.js";
 import { log } from "./utils/logger.js";
 import { logNodeEvent } from "./utils/eventLog.js";
@@ -34,6 +35,7 @@ import { start as startRetention, stop as stopRetention } from "./retention/runn
 import { startWorkerProbe, stopWorkerProbe } from "./health/workerProbe.js";
 
 await loadBuiltins();
+await registry.loadAll();          // build in-memory cache from DB
 await loadTriggerBuiltins();
 // Subscribe to all enabled triggers on worker boot. Errors per-trigger are
 // logged but don't crash the worker.
@@ -53,6 +55,12 @@ bootstrapAdmin()
 // while engineers are debugging.
 try { startRetention(); }
 catch (e) { log.warn("retention start failed", { error: e.message }); }
+
+// Plugin healthcheck loop — periodically probes /readyz on every
+// http-transport plugin so the admin Plugins page renders fresh
+// status. No-op when no http plugins are installed.
+try { startHealthcheck(); }
+catch (e) { log.warn("plugin healthcheck start failed", { error: e.message }); }
 
 // Reap any execution rows left in `running` from a previous crash. We
 // don't know what BullMQ has in flight at this exact moment, but a fresh
@@ -344,6 +352,7 @@ if (probePort > 0) {
 
 process.on("SIGTERM", async () => {
   stopWorkerProbe();
+  stopHealthcheck();
   stopRetention();
   await stopTriggerManager();
   await worker.close();
