@@ -156,6 +156,8 @@ Other admin operations on the same path:
 | POST   | `/plugins/:name/:version/set-default`      | Promote a version to the default for unpinned action refs (Phase 3). |
 | GET    | `/plugins/catalog?refresh=1`               | Marketplace catalog (Phase 3). |
 | POST   | `/plugins/install-from-catalog`            | Checksum-verified install from a catalog entry (Phase 3). |
+| POST   | `/plugins/agent/generate`                  | LLM drafts a plugin scaffold from a free-form prompt (Phase 4). |
+| POST   | `/plugins/agent/download`                  | Bundles a generated scaffold into an `application/zip` (Phase 4). |
 
 ## Authoring an external plugin — with the SDK (Phase 2)
 
@@ -314,10 +316,12 @@ dependencies) and a non-root, no-privileged container.
 | `backend/src/plugins/install.js`     | fetch /manifest, validate, checksum-verify, persist |
 | `backend/src/plugins/catalog.js`     | marketplace catalog loader + 5-minute cache (Phase 3) |
 | `backend/src/plugins/healthcheck.js` | background `/readyz` poller (Phase 3) |
-| `backend/src/api/plugins.js`         | admin install/enable/disable/uninstall + catalog + set-default |
+| `backend/src/plugins/agent/generate.js` | LLM plugin-generator agent (Phase 4) |
+| `backend/src/api/plugins.js`         | admin install/enable/disable/uninstall + catalog + set-default + agent |
 | `backend/src/cli/installPlugin.js`   | `npm run install-plugin -- --endpoint URL` |
 | `backend/test/plugin-http-transport.test.js` | install + manifest validation tests |
 | `backend/test/plugin-phase3.test.js`         | checksum verify + parsePluginRef + catalog loader |
+| `backend/test/plugin-agent.test.js`          | agent JSON-parser + validator + path-traversal guard (Phase 4) |
 | `plugin-sdk/`                        | `@daisy-dag/plugin-sdk` — servePlugin() + manifest validation |
 | `plugin-sdk/README.md`               | author-facing usage docs |
 | `plugins-external/reddit/`           | example external plugin (SDK-driven, ~25 lines) |
@@ -442,6 +446,61 @@ Relevant env vars:
 | `PLUGIN_HEALTHCHECK_DOWN_AFTER`        | 3       | Consecutive failures before status → `down`. |
 | `PLUGIN_CATALOG_URL`                   | _unset_ | Remote catalog HTTPS endpoint. |
 | `PLUGIN_CATALOG_FILE`                  | `deploy/plugin-catalog.example.json` | Local-disk catalog fallback. |
+
+### Plugin-generator agent ("Ask agent")
+
+The Plugins page exposes an **Ask agent** button on the *Installed* tab.
+It runs the user's free-form prompt through the same LLM provider the
+rest of the app uses (Anthropic or OpenAI-compatible — see
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) and returns a complete
+HTTP-transport plugin scaffold:
+
+| File             | Role |
+|------------------|------|
+| `manifest.json`  | Daisy-DAG plugin manifest (name, version, inputSchema, outputSchema, configRefs). |
+| `index.js`       | `servePlugin()` from `@daisy-dag/plugin-sdk` with the generated `execute()` body. |
+| `package.json`   | ESM, depends on `@daisy-dag/plugin-sdk` via `file:../../plugin-sdk`. |
+| `Dockerfile`     | `node:22-alpine`, copies `plugin-sdk` + plugin folder, runs as `node`. |
+| `README.md`      | Brief description + I/O shape + required configs. |
+
+Plus a markdown **Deploy** tab the UI renders inline with build / run /
+install commands.
+
+Backend wiring:
+
+```
+POST /plugins/agent/generate      (admin) — returns JSON { name, version, files, deployInstructions }
+POST /plugins/agent/download      (admin) — returns application/zip
+                                            payload: { name, files: [{ path, content }] }
+```
+
+The agent does **not** install anything — it just emits files. The
+admin reviews the bundle in the dialog (one tab per file, plus the
+deploy tab), clicks **Download zip**, unpacks under
+`plugins-external/<name>/` in their repo, brings the container up,
+then completes the usual `Install from URL` flow on the same page.
+
+Every generation and download lands in the audit log under
+`plugin.agent.generate` / `plugin.agent.download` so the trail of
+"who asked the agent to draft what" is preserved.
+
+#### Generation contract
+
+The system prompt forces the model to emit a single strict JSON object.
+`backend/src/plugins/agent/generate.js` then:
+
+1. Strips any ` ```json ` fences the model might wrap the response in.
+2. Slices to the outermost `{...}` block (tolerates trailing prose).
+3. Parses + validates the shape: plugin name matches
+   `/^[a-z][a-z0-9_.-]*$/`, version is semver, every required file is
+   present, paths can't escape the plugin folder (`..`, leading `/`),
+   `manifest.json`'s content round-trips as JSON.
+4. Surfaces a clear `422` error on any of the above so the UI doesn't
+   render garbage.
+
+The download endpoint mirrors the files under
+`plugins-external/<name>/<file>` inside the zip so the operator can
+unpack straight into their repo root.
 
 ### Admin UI
 

@@ -149,6 +149,19 @@ export const Plugins = {
     api.post("/plugins/install-from-catalog", {
       catalogEntryUrl, manifestUrl, manifestSha256, endpoint, source,
     }).then(r => r.data),
+
+  // Plugin-generator agent (admin only). Returns:
+  //   { name, version, summary, files: [{path, content}], deployInstructions }
+  askAgent: ({ prompt, transport = "http" }) =>
+    api.post("/plugins/agent/generate", { prompt, transport }).then(r => r.data),
+
+  // Download the generated bundle as a zip. The browser receives a Blob
+  // we trigger a save-as on.
+  downloadAgentZip: async ({ name, files }) => {
+    const r = await api.post("/plugins/agent/download",
+      { name, files }, { responseType: "blob" });
+    return r.data;        // Blob
+  },
 };
 
 export const AI = {

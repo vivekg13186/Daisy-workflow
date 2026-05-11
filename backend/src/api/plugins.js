@@ -15,9 +15,11 @@ import { pool } from "../db/pool.js";
 import { registry } from "../plugins/registry.js";
 import { installFromEndpoint, installFromCatalog } from "../plugins/install.js";
 import { loadCatalog } from "../plugins/catalog.js";
+import { generatePlugin } from "../plugins/agent/generate.js";
 import { requireUser, requireRole } from "../middleware/auth.js";
 import { ValidationError, NotFoundError, ForbiddenError } from "../utils/errors.js";
 import { auditLog } from "../audit/log.js";
+import JSZip from "jszip";
 
 const router = Router();
 router.use(requireUser);
@@ -248,6 +250,64 @@ router.post("/refresh", async (req, res, next) => {
   try {
     await registry.loadAll();
     res.json({ ok: true, count: registry.list().length });
+  } catch (e) { next(e); }
+});
+
+// ──────────────────────────────────────────────────────────────────
+// Plugin-generator agent (admin only).
+//
+//   POST /plugins/agent/generate      → JSON   { name, version, files, deployInstructions }
+//   POST /plugins/agent/download      → binary application/zip
+//
+// The agent does NOT install anything — it just emits a file bundle.
+// Operators still review the generated code and run the usual install
+// flow afterwards (Plugins → Install from URL).
+// ──────────────────────────────────────────────────────────────────
+
+router.post("/agent/generate", async (req, res, next) => {
+  try {
+    const { prompt, transport = "http" } = req.body || {};
+    const generated = await generatePlugin({ prompt, transport });
+    await auditLog({
+      req, action: "plugin.agent.generate",
+      resource: { type: "plugin", name: generated.name },
+      metadata: { version: generated.version, fileCount: generated.files.length },
+    });
+    res.json(generated);
+  } catch (e) { next(e); }
+});
+
+router.post("/agent/download", async (req, res, next) => {
+  try {
+    const { name, files } = req.body || {};
+    if (!name || typeof name !== "string" || !/^[a-z][a-z0-9_.-]*$/.test(name)) {
+      throw new ValidationError("name must be a dotted-string plugin identifier");
+    }
+    if (!Array.isArray(files) || files.length === 0) {
+      throw new ValidationError("files[] is required");
+    }
+    const zip = new JSZip();
+    // Mirror the on-disk layout under plugins-external/<name>/<file> so
+    // the operator can unzip straight into their repo.
+    const folder = zip.folder(`plugins-external/${name}`);
+    for (const f of files) {
+      if (!f || typeof f.path !== "string" || typeof f.content !== "string") {
+        throw new ValidationError("every file must be { path, content } strings");
+      }
+      if (f.path.includes("..") || f.path.startsWith("/")) {
+        throw new ValidationError(`illegal path "${f.path}"`);
+      }
+      folder.file(f.path, f.content);
+    }
+    const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+    await auditLog({
+      req, action: "plugin.agent.download",
+      resource: { type: "plugin", name },
+      metadata: { fileCount: files.length, sizeBytes: buf.length },
+    });
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${name}-plugin.zip"`);
+    res.send(buf);
   } catch (e) { next(e); }
 });
 

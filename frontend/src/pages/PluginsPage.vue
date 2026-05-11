@@ -38,6 +38,14 @@
         </q-btn>
         <q-btn
           v-if="tab === 'installed'"
+          flat dense icon="auto_awesome" no-caps
+          color="primary" label="Ask agent"
+          @click="openAgent"
+        >
+          <q-tooltip>Have an AI agent draft a brand-new plugin for you</q-tooltip>
+        </q-btn>
+        <q-btn
+          v-if="tab === 'installed'"
           color="primary" unelevated icon="add" no-caps
           label="Install from URL" @click="openInstall"
         />
@@ -354,6 +362,136 @@
     </q-dialog>
 
     <!-- ====================================================== -->
+    <!-- Ask agent dialog                                        -->
+    <!-- ====================================================== -->
+    <q-dialog v-model="agentOpen" persistent>
+      <q-card style="min-width: 720px; max-width: 95vw">
+        <q-card-section class="row items-center no-wrap">
+          <div class="col">
+            <div class="text-subtitle1">
+              <q-icon name="auto_awesome" class="q-mr-xs" />
+              Ask agent to draft a plugin
+            </div>
+            <div class="text-caption text-grey-7 q-mt-xs">
+              Describe what the plugin should do. The agent emits a complete
+              HTTP-transport scaffold (manifest + index.js + package.json +
+              Dockerfile + README) — you review, download, and deploy.
+            </div>
+          </div>
+          <q-btn flat dense round icon="close" v-close-popup />
+        </q-card-section>
+
+        <!-- ─── Stage 1: prompt the agent ─── -->
+        <template v-if="!agentResult">
+          <q-card-section class="q-gutter-md">
+            <q-input
+              v-model="agentPrompt"
+              outlined
+              type="textarea"
+              autogrow
+              :input-style="{ minHeight: '120px' }"
+              label="What should the plugin do?"
+              placeholder="e.g. Translate text from English to any target language using the DeepL Pro API. Inputs: text (string), targetLang (string, default 'DE'). Output: { translated: string }. Reads a deepl config of type deepl.apikey."
+              autofocus
+            />
+            <div class="row items-center q-gutter-sm">
+              <q-select
+                v-model="agentTransport"
+                :options="[{ label: 'HTTP container (recommended)', value: 'http' }]"
+                outlined dense emit-value map-options
+                label="Transport"
+                style="min-width: 260px"
+              />
+              <q-banner class="bg-blue-1 text-blue-9 col" rounded dense>
+                <q-icon name="info" class="q-mr-xs" />
+                The agent only emits files — it never auto-installs.
+              </q-banner>
+            </div>
+            <q-banner v-if="agentError" class="bg-red-1 text-red-9" rounded>
+              {{ agentError }}
+            </q-banner>
+          </q-card-section>
+          <q-card-actions align="right">
+            <q-btn flat label="Cancel" v-close-popup :disable="agentLoading" />
+            <q-btn
+              unelevated color="primary" no-caps
+              :loading="agentLoading"
+              :disable="!agentPrompt || agentPrompt.length < 10"
+              label="Generate"
+              @click="onAgentGenerate"
+            />
+          </q-card-actions>
+        </template>
+
+        <!-- ─── Stage 2: review the result ─── -->
+        <template v-else>
+          <q-card-section>
+            <div class="row items-center q-gutter-sm">
+              <q-chip color="primary" text-color="white" icon="extension"
+                      :label="agentResult.name" />
+              <q-chip outline color="grey-7" :label="`v${agentResult.version}`" />
+              <q-space />
+              <q-btn flat dense no-caps icon="refresh" label="Regenerate"
+                     @click="agentResult = null" />
+            </div>
+            <div v-if="agentResult.summary" class="text-body2 q-mt-sm text-grey-8">
+              {{ agentResult.summary }}
+            </div>
+          </q-card-section>
+
+          <q-card-section class="q-pt-none">
+            <q-tabs
+              v-model="agentFileTab"
+              align="left" inline-label no-caps dense
+              indicator-color="primary" active-color="primary"
+              class="text-grey-7"
+            >
+              <q-tab name="__deploy__" icon="rocket_launch" label="Deploy" />
+              <q-tab
+                v-for="(f, i) in agentResult.files"
+                :key="f.path"
+                :name="`${i}`"
+                :label="f.path"
+              />
+            </q-tabs>
+            <q-separator />
+            <q-tab-panels v-model="agentFileTab" animated class="bg-grey-1">
+              <q-tab-panel name="__deploy__" class="q-pa-md">
+                <div class="markdown-body" v-html="renderedDeploy"></div>
+              </q-tab-panel>
+              <q-tab-panel
+                v-for="(f, i) in agentResult.files"
+                :key="f.path"
+                :name="`${i}`"
+                class="q-pa-none"
+              >
+                <div class="row items-center q-pa-sm bg-grey-2">
+                  <code class="text-caption">{{ f.path }}</code>
+                  <q-space />
+                  <q-btn
+                    flat dense no-caps icon="content_copy" size="sm"
+                    label="Copy" @click="copyText(f.content)"
+                  />
+                </div>
+                <pre class="agent-file">{{ f.content }}</pre>
+              </q-tab-panel>
+            </q-tab-panels>
+          </q-card-section>
+
+          <q-card-actions align="right">
+            <q-btn flat label="Close" v-close-popup />
+            <q-btn
+              unelevated color="primary" icon="download" no-caps
+              :loading="agentDownloading"
+              label="Download zip"
+              @click="onAgentDownload"
+            />
+          </q-card-actions>
+        </template>
+      </q-card>
+    </q-dialog>
+
+    <!-- ====================================================== -->
     <!-- Compose snippet dialog                                  -->
     <!-- ====================================================== -->
     <q-dialog v-model="snippetOpen">
@@ -389,6 +527,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from "vue";
 import { useQuasar, copyToClipboard } from "quasar";
+import { marked } from "marked";
 import { Plugins } from "../api/client.js";
 
 const $q = useQuasar();
@@ -428,6 +567,28 @@ const catalogInstallError    = ref("");
 // -- Compose snippet dialog -------------------------------------------
 const snippetOpen   = ref(false);
 const snippetTarget = ref(null);
+
+// -- Ask-agent dialog -------------------------------------------------
+const agentOpen        = ref(false);
+const agentPrompt      = ref("");
+const agentTransport   = ref("http");
+const agentLoading     = ref(false);
+const agentError       = ref("");
+const agentResult      = ref(null);          // null | { name, version, summary, files, deployInstructions }
+const agentFileTab     = ref("__deploy__");
+const agentDownloading = ref(false);
+
+const renderedDeploy = computed(() => {
+  const md = agentResult.value?.deployInstructions || "";
+  try { return marked.parse(md, { breaks: true }); }
+  catch { return `<pre>${escapeHtml(md)}</pre>`; }
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
 
 const columns = [
   { name: "name",       label: "Name",      field: "name",      align: "left", sortable: true },
@@ -688,6 +849,67 @@ async function copySnippet() {
   }
 }
 
+async function copyText(text) {
+  try {
+    await copyToClipboard(text || "");
+    $q.notify({ type: "positive", message: "Copied to clipboard", timeout: 1000 });
+  } catch (e) {
+    notifyError(e, "Copy failed");
+  }
+}
+
+// ---- Ask-agent ------------------------------------------------------
+function openAgent() {
+  // Don't reset prompt — common to tweak + regenerate.
+  agentResult.value  = null;
+  agentError.value   = "";
+  agentFileTab.value = "__deploy__";
+  agentOpen.value    = true;
+}
+
+async function onAgentGenerate() {
+  agentLoading.value = true;
+  agentError.value   = "";
+  try {
+    const out = await Plugins.askAgent({
+      prompt:    agentPrompt.value.trim(),
+      transport: agentTransport.value,
+    });
+    agentResult.value  = out;
+    agentFileTab.value = "__deploy__";
+  } catch (e) {
+    agentError.value = errMsg(e) || "Agent generation failed";
+  } finally {
+    agentLoading.value = false;
+  }
+}
+
+async function onAgentDownload() {
+  if (!agentResult.value) return;
+  agentDownloading.value = true;
+  try {
+    const blob = await Plugins.downloadAgentZip({
+      name:  agentResult.value.name,
+      files: agentResult.value.files,
+    });
+    // Browser save-as. We don't trust the server's filename header; build
+    // our own from the agent's plugin name.
+    const url = URL.createObjectURL(blob);
+    const a   = document.createElement("a");
+    a.href     = url;
+    a.download = `${agentResult.value.name}-plugin.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    $q.notify({ type: "positive", message: "Plugin zip downloaded", timeout: 1500 });
+  } catch (e) {
+    notifyError(e, "Download failed");
+  } finally {
+    agentDownloading.value = false;
+  }
+}
+
 // ---- helpers ---------------------------------------------------------
 function statusColor(s) {
   switch (s) {
@@ -725,5 +947,35 @@ function notifyError(e, fallback) {
 .snippet :deep(textarea) {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+.agent-file {
+  margin: 0;
+  padding: 12px 16px;
+  max-height: 50vh;
+  overflow: auto;
+  background: #fafafa;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre;
+}
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3) { margin-top: 1em; }
+.markdown-body :deep(code) {
+  background: #eef;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 0.92em;
+}
+.markdown-body :deep(pre) {
+  background: #fafafa;
+  border: 1px solid #e6e6e6;
+  border-radius: 4px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.markdown-body :deep(pre code) {
+  background: transparent;
+  padding: 0;
 }
 </style>
