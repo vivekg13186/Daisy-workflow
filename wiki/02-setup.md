@@ -1,93 +1,40 @@
-# Setup
+# Setup & deployment
 
-Two paths: **local dev**   or **Docker**  .
+**Audience:** devops folk standing up a real deployment. If you're
+trying it on a laptop, read [Getting started](./00-getting-started.md)
+first — it covers the dev path with much less ceremony.
+
+This page covers the operational shape: Docker profiles, env vars,
+migrations, and a brief troubleshooting list.
 
 ## Prerequisites
 
-- Node.js 20 or newer
-- Docker + docker compose (only for the Docker path; or if you want Postgres + Redis as containers while the rest runs locally)
-- A modern browser
+- Node.js ≥ 20 (production images are `node:22-alpine`)
+- Docker + docker compose
+- PostgreSQL 14+ and Redis 7+ (the bundled images are fine; managed
+  services work just as well — point `DATABASE_URL` / `REDIS_URL` at
+  them)
 
-## Local development
+## Compose profiles
 
-### 1. Bring up Postgres and Redis
+The root `docker-compose.yml` has two profiles:
 
-These are the only persistent dependencies. The repo ships a compose file that exposes them on the standard ports.
+- **default** — just Postgres + Redis. You run the backend/frontend
+  somewhere else (locally, k8s, your platform of choice).
+- **`full`** — also builds and runs the backend + frontend as
+  containers. Useful for a single-host deployment or a
+  reproducible test environment.
 
-```bash
-docker compose up -d postgres redis
-```
+Additional overlays you compose on top:
 
-(If you have your own Postgres / Redis already, point the env vars at them and skip this.)
+| File                              | Purpose |
+|-----------------------------------|---------|
+| `docker-compose.plugins.yml`      | Brings up external HTTP-transport plugins (e.g. the example `reddit-plugin`). Context is the repo root so `plugin-sdk/` is reachable during the build. |
+| `docker-compose.backup.yml`       | `pg-backup` cron container that runs `backup.sh` on a schedule. See [Backups](./09-backups.md). |
+| `docker-compose.tls.yml`          | Edge container (Caddy or nginx) terminating TLS. See [TLS edge](./14-tls-edge.md). |
+| `observability/docker-compose.yml`| Grafana + Tempo + Loki + Prometheus with pre-provisioned dashboards and the five default alert rules. See [Alerting](./12-alerting.md). |
 
-### 2. Backend
-
-```bash
-cd backend
-cp .env.example .env
-# edit .env if needed — the defaults match the docker compose
-npm install
-npm run migrate     # applies SQL migrations (graphs, archived_graphs,
-                    # executions, configs, triggers)
-npm run dev         # starts the API on :3000 + spins up an in-process worker
-```
-
-`npm run dev` runs the API server **and** an in-process BullMQ worker, so a single process handles HTTP, WebSocket, and execution. In production you'd typically run `npm start` for the API and `npm run worker` separately, scaled horizontally.
-
-### 3. Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev         # http://localhost:5173 (proxies /api and /ws to :3000)
-```
-
-### 4. Configure optional features
-
-Most credentials live in **Configurations** now (Home page → Configurations table) rather than `.env` — that keeps secrets encrypted at rest and reusable across nodes. The few env-only knobs:
-
-| Feature | Required env vars |
-|---------|------------------|
-| AI assistant ("Prompt" tab) | `ANTHROPIC_API_KEY` *or* `OPENAI_API_KEY`, optional `AI_MODEL` / `AI_BASE_URL` / `AI_PROVIDER` |
-| Configuration encryption | `CONFIG_SECRET=<long-random-string>` (a built-in dev key is used when unset; never ship to prod that way) |
-| File / CSV / Excel sandbox | `FILE_ROOT=/path/to/sandbox` (recommended in any shared deployment) |
-
-The full list of variables is documented in `backend/.env.example`. The legacy `SMTP_*` vars are still read for fallback but the recommended flow is to create a `mail.smtp` configuration and reference it by name from `email.send`.
-
-### 5. Try it out
-
-Open `http://localhost:5173`. The Home page lists three things: **Workflows**, **Triggers**, **Configurations**. Click **+ New flow** to start designing on the canvas.
-
-Sample workflows ship as JSON under `backend/samples/`:
-
-```bash
-ls backend/samples/
-# → batch.json              email-notification.json   parallel-with-retry.json
-#   csv-to-excel.json       hello-world.json          sql-pipeline.json
-#   web-scrape.json         spec-form.json
-```
-
-Use the toolbar's **Import** button (upload icon) to load one. Click **Save** to persist, **Run** (▶) to execute with optional JSON input. The execution opens in the read-only Instance Viewer with the graph coloured by per-node status.
-
-To make a workflow run on its own schedule, create a `schedule` trigger from the Triggers table. To send an email or publish MQTT, first create a `mail.smtp` / `mqtt` configuration, then reference its name from the corresponding plugin node.
-
-### Stopping things
-
-```bash
-docker compose down       # leaves volumes intact
-docker compose down -v    # also wipes the Postgres volume
-```
-
----
-
-## Docker
-
-The compose file has two profiles:
-
-- **default profile** — just Postgres + Redis. You run the backend / frontend locally against them.
-- **`full` profile** — also builds and runs the backend + frontend as containers.
-
-### Just Postgres + Redis (recommended for development)
+### Just Postgres + Redis (dev-stack-only)
 
 ```bash
 docker compose up -d
@@ -99,40 +46,131 @@ docker compose up -d
 docker compose --profile full up -d --build
 ```
 
-That brings up four containers: `dag_postgres`, `dag_redis`, `dag_backend` (port 3000), `dag_frontend` (port 5173 → nginx).
+That brings up `dag_postgres`, `dag_redis`, `dag_backend` (port 3000),
+`dag_frontend` (port 5173 → nginx). Pair with the overlays you need.
 
-To pass env vars (AI keys, `CONFIG_SECRET`, `FILE_ROOT`, etc.) to the backend container, either:
+### With external plugins
 
-- Add them under the `backend` service's `environment:` block in `docker-compose.yml`, or
-- Create a `.env` file at the repo root (compose auto-loads it) and reference vars with `${VAR_NAME}` in the compose file.
+```bash
+docker compose -f docker-compose.yml \
+               -f docker-compose.plugins.yml \
+               --profile full up -d --build
+```
 
-### Running migrations against a containerized DB
+Then point Daisy at the plugin endpoint (Plugins page → Install from
+URL → `http://reddit-plugin:8080`).
+
+## Env vars
+
+Everything is read from `backend/.env` (or the container's env block).
+The full list is in `backend/.env.example`; below is the operational
+short list.
+
+| Var                                | Default                                 | What it does |
+|------------------------------------|-----------------------------------------|--------------|
+| `DATABASE_URL`                     | `postgres://dag:dag@localhost:5432/dag_engine` | Postgres connection string. |
+| `REDIS_URL`                        | `redis://localhost:6379`                | Redis for BullMQ + WS fan-out + rate-limit store. |
+| `PORT`                             | `3000`                                  | API port. |
+| `WORKER_CONCURRENCY`               | `4`                                     | Per-process concurrent executions. |
+| `CONFIG_SECRET`                    | _(dev fallback)_                        | KEK seed for Configurations encryption — **set this in prod**. |
+| `JWT_SECRET`                       | _(dev fallback)_                        | Access-token signing secret. |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | _(unset)_                          | Enables AI features (assistant, agent plugin, diagnose, plugin generator). |
+| `AI_MODEL` / `AI_BASE_URL` / `AI_PROVIDER` | provider defaults              | Override model + base URL. |
+| `FILE_ROOT`                        | _(unset)_                               | Sandbox path for file/CSV/Excel plugins. Recommended in any shared deployment. |
+| `OIDC_*`                           | _(unset)_                               | OIDC config block — see [Auth](./06-auth.md). |
+| `WORKFLOW_TIMEOUT_MS` / `NODE_TIMEOUT_MS` | layered defaults                | See [Execution limits](./07-execution-limits.md). |
+| `RETENTION_*`                      | sane defaults                            | See [Retention](./08-retention.md). |
+| `PLUGIN_HEALTHCHECK_*`             | 60s / 3s / 3                            | See [Plugin architecture](./16-plugin-architecture.md). |
+| `PLUGIN_CATALOG_URL` / `PLUGIN_CATALOG_FILE` | _(file fallback)_           | Marketplace catalog source. |
+
+For dev-machine quickstart use, see
+[Getting started](./00-getting-started.md). For TLS, alert routing,
+KMS providers, and similar concerns, the dedicated ops pages have the
+details.
+
+## Migrations
 
 ```bash
 docker compose exec backend npm run migrate
 ```
 
-If you're running the backend locally but Postgres in Docker, just `cd backend && npm run migrate` from the host — it picks up the same `DATABASE_URL`.
+If you're running the backend on the host and Postgres in Docker,
+`cd backend && npm run migrate` picks up the same `DATABASE_URL`.
 
-### Building the frontend image
+Migrations are append-only numbered SQL files under
+`backend/migrations/`. The runner records applied IDs in the
+`schema_migrations` table and won't re-apply. Never edit a committed
+migration — write the next one.
+
+## Bootstrapping an admin user
 
 ```bash
-cd frontend && npm install && npm run build      # produces dist/
-# or use the compose 'full' profile which does this for you
+docker compose exec backend npm run create-admin
+# or, locally:
+cd backend && npm run create-admin
 ```
 
-The frontend Dockerfile is a two-stage build: Node 20 to compile, nginx 1.27 to serve `dist/`. The container exposes port 80 and is mapped to host 5173 by compose. There's no built-in API proxy in the prod nginx config — for production you'd typically front both with a reverse proxy or set the API URL via build args.
+Interactive prompt for email + password. Creates the user with role
+`admin` and membership of the default workspace. Rerun for additional
+admins.
 
----
+## Building the frontend separately
+
+The compose `full` profile builds the frontend image for you. If you
+want a static bundle to serve from your existing edge:
+
+```bash
+cd frontend && npm install && npm run build
+# produces frontend/dist/  — point your edge at it,
+# proxy /api and /ws to the backend.
+```
+
+The frontend Dockerfile is a two-stage build (Node 22 to compile,
+nginx 1.27 to serve `dist/`). The container exposes port 80 mapped to
+host 5173. There's no built-in API proxy in the prod nginx config —
+front both with a reverse proxy (see [TLS edge](./14-tls-edge.md)) or
+pass the API URL via build args.
+
+## Stopping things
+
+```bash
+docker compose down       # leaves volumes intact
+docker compose down -v    # wipes the Postgres volume — careful
+```
 
 ## Troubleshooting
 
-- **`npm run migrate` fails with ECONNREFUSED** — Postgres isn't up yet. `docker compose up -d postgres` and wait ~2 s, or check `docker compose logs postgres`.
-- **AI button doesn't appear in the UI** — the frontend hides it when `GET /ai/status` reports `configured: false`. Visit `http://localhost:3000/ai/status` to see what the backend received (it shows a masked key preview and any warnings).
-- **401 from Anthropic / OpenAI despite a set key** — see the warnings field of `/ai/status`. Common causes: trailing whitespace in `.env`, wrong key prefix (`sk-` vs `sk-ant-`), copy-paste truncation.
-- **`email.send` / `mqtt.publish` / `sql.*` errors with `config "<name>" not found`** — the named configuration doesn't exist yet, or has a different name than what you typed in the node. Open Home → Configurations and verify the row.
-- **`agent` plugin: `no agent titled "<title>"`** — the `agent` input is case-sensitive and matches the agent's **Title** verbatim. Open Home → Agents to check.
-- **`agent` plugin: `config "<name>" has no apiKey set`** — the linked `ai.provider` configuration is incomplete. Open Home → Configurations and fill in the required fields.
-- **File plugins refuse my path** — `FILE_ROOT` is set; the path tries to escape. Either keep paths inside the root or unset `FILE_ROOT` for unrestricted access (only recommended for local dev).
-- **Graph view shows nodes as "pending" forever** — open Dev Tools → Network and confirm `GET /executions/:id` returns a `context.nodes` object. If it doesn't, the worker hasn't finished yet — wait or click the refresh button.
-- **CONFIG_SECRET dev-fallback warning at startup** — production deployments must set `CONFIG_SECRET` to a long random string. Without it, secrets are encrypted with a built-in fallback key, which is portable but obviously not secret.
+- **`npm run migrate` fails with `ECONNREFUSED`** — Postgres isn't up
+  yet. `docker compose up -d postgres` and wait a couple of seconds.
+- **AI button doesn't appear in the UI** — the frontend hides it when
+  `GET /ai/status` reports `configured: false`. Visit
+  `http://localhost:3000/ai/status` to see what the backend received
+  (it shows a masked key preview and any warnings).
+- **`401 from Anthropic / OpenAI` despite a set key** — see the
+  `warnings` field of `/ai/status`. Common causes: trailing whitespace
+  in `.env`, wrong key prefix (`sk-` vs `sk-ant-`), copy-paste
+  truncation.
+- **`email.send` / `mqtt.publish` / `sql.*` errors with
+  `config "<name>" not found`** — the named configuration doesn't
+  exist yet, or has a different name than what's referenced in the
+  node. Open Home → Configurations and verify the row.
+- **`agent` plugin: `no agent titled "<title>"`** — the `agent` input
+  is case-sensitive and matches the agent's **Title** verbatim. Open
+  Home → Agents to check.
+- **`agent` plugin: `config "<name>" has no apiKey set`** — the linked
+  `ai.provider` configuration is incomplete. Fill it in from Home →
+  Configurations.
+- **File plugins refuse a path** — `FILE_ROOT` is set; the path tries
+  to escape. Keep paths inside the root or unset `FILE_ROOT` for
+  unrestricted access (only acceptable in local dev).
+- **Graph view shows nodes as "pending" forever** — Dev Tools →
+  Network: confirm `GET /executions/:id` returns a `context.nodes`
+  object. If it doesn't, the worker hasn't finished yet.
+- **`CONFIG_SECRET dev-fallback` warning at startup** — production
+  deployments must set `CONFIG_SECRET` to a long random string.
+  Without it, secrets are encrypted with a built-in fallback key,
+  which is portable but obviously not secret.
+- **Plugin healthcheck flips healthy plugins to `degraded`** — increase
+  `PLUGIN_HEALTHCHECK_TIMEOUT_MS` (default 3000) if the plugin's
+  `/readyz` is sometimes slow. Set `PLUGIN_HEALTHCHECK_INTERVAL_MS=0`
+  to disable polling entirely.

@@ -1,34 +1,73 @@
-# DAISY Engine — Wiki
+# Daisy-DAG — Wiki
 
-A JSON-defined DAG workflow engine with a drag-and-drop visual editor, pluggable actions, parallel execution, retries, batch fan-out, FEEL expressions, and an AI assistant.
+A JSON-defined DAG workflow engine. Visual editor, pluggable actions,
+parallel execution, retries, batch fan-out, FEEL expressions, KMS
+envelope encryption, OIDC, audit logging, AI-assisted authoring, and
+out-of-process plugins.
 
-## Contents
+This wiki is grouped by **who's reading**, not by feature.
 
-1. [Overview](./01-overview.md) — what the app does and how the pieces fit together.
-2. [Setup](./02-setup.md) — local dev and Docker deployment.
-3. [DSL reference](./03-dsl-reference.md) — full JSON syntax, FEEL expressions, runtime context, and execution semantics.
-4. [Plugin reference](./04-plugins.md) — every built-in action plugin with inputs, outputs, and examples.
-5. [Configs encryption](./05-configs-encryption.md) — KMS envelope encryption, providers, rotation, audit.
-6. [Auth & authorization](./06-auth.md) — local accounts, OIDC, roles, multi-workspace, token rotation.
-7. [Execution limits](./07-execution-limits.md) — wall-clock timeouts, retry cap, layered defaults.
-8. [Retention](./08-retention.md) — daily Postgres prune for executions, refresh tokens, history.
-9. [Backups](./09-backups.md) — pg_dump + restore scripts, docker overlay, runbook for 3 deployment shapes.
-10. [Health probes](./10-health-probes.md) — `/healthz` + `/readyz` on API + worker, k8s + compose examples.
-11. [Rate limiting](./11-rate-limiting.md) — per-IP, per-user, per-email budgets backed by Redis.
-12. [Alerting](./12-alerting.md) — 5 default Grafana rules + Slack/PagerDuty/email routing.
-13. [Audit logging](./13-audit-logging.md) — who/what/when on security-relevant actions.
-14. [TLS edge](./14-tls-edge.md) — nginx / Caddy / k8s ingress configs for production-grade HTTPS.
-15. [Self-healing](./15-self-healing.md) — diagnose-on-demand (PR A) + roadmap.
-16. [Plugin architecture](./16-plugin-architecture.md) — in-process + HTTP-transport plugins, install / discover / version (Phase 1).
+---
+
+## Start here
+
+| Page                                              | What it covers |
+|---------------------------------------------------|----------------|
+| [Philosophy](./00-philosophy.md)                  | The five principles the codebase actually follows. Read first. |
+| [Design choices](./00-design-choices.md)          | Why JSON DSL, why FEEL, why Postgres, why BullMQ, why split plugins. Concrete trade-offs. |
+| [Getting started (developers)](./00-getting-started.md) | Local dev quickstart, code layout, common commands, your first plugin. |
+| [Overview](./01-overview.md)                      | Component diagram, execution algorithm, data model, scaling. |
+
+---
+
+## For developers
+
+You're authoring workflows, writing plugins, or working on the engine
+itself.
+
+| Page                                              | What it covers |
+|---------------------------------------------------|----------------|
+| [DSL reference](./03-dsl-reference.md)            | Full JSON syntax, FEEL expressions, runtime context, execution semantics. |
+| [Plugin reference](./04-plugins.md)               | Every built-in action plugin with inputs, outputs, examples. |
+| [Plugin architecture](./16-plugin-architecture.md)| In-process vs HTTP-transport, the SDK, manifests, marketplace catalog, the plugin generator agent. |
+| [Execution limits](./07-execution-limits.md)      | Per-node + per-workflow timeouts, retry cap, token budget. |
+| [Self-healing](./15-self-healing.md)              | Diagnose-on-demand for failed nodes. |
+
+Reference for individual plugins lives under [`plugins/`](./plugins/);
+trigger drivers under [`triggers/`](./triggers/).
+
+---
+
+## For devops
+
+You're deploying, securing, scaling, or operating it.
+
+| Page                                              | What it covers |
+|---------------------------------------------------|----------------|
+| [Setup](./02-setup.md)                            | Docker layouts, env vars, compose profiles. |
+| [Auth & authorization](./06-auth.md)              | Local accounts, OIDC, roles, multi-workspace, token rotation. |
+| [Configs encryption](./05-configs-encryption.md)  | KMS envelope encryption, providers, rotation, audit. |
+| [TLS edge](./14-tls-edge.md)                      | nginx / Caddy / k8s ingress for production HTTPS. |
+| [Rate limiting](./11-rate-limiting.md)            | Per-IP, per-user, per-email budgets backed by Redis. |
+| [Health probes](./10-health-probes.md)            | `/healthz` + `/readyz` on API + worker, k8s + compose examples. |
+| [Retention](./08-retention.md)                    | Daily Postgres prune for executions, refresh tokens, history. |
+| [Backups](./09-backups.md)                        | `pg_dump`, restore scripts, compose overlay, deployment-shape runbook. |
+| [Alerting](./12-alerting.md)                      | 5 default Grafana rules + Slack/PagerDuty/email routing. |
+| [Audit logging](./13-audit-logging.md)            | Who-did-what-when on security-relevant actions. |
+
+---
 
 ## Quick links
 
 - Sample workflows: [`backend/samples/`](../backend/samples/)
 - Backend code: [`backend/src/`](../backend/src/)
 - Frontend code: [`frontend/src/`](../frontend/src/)
-- Architecture diagram: [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+- Plugin SDK: [`plugin-sdk/`](../plugin-sdk/)
+- Example external plugin: [`plugins-external/reddit/`](../plugins-external/reddit/)
+- Migrations: [`backend/migrations/`](../backend/migrations/)
+- Observability stack: [`observability/`](../observability/)
 
- 
+---
 
-> [!NOTE]
-> This application is developed with the support of AI agents.
+> Daisy-DAG is developed with AI assistance. Bug reports and feedback
+> are welcome via the repo's issue tracker.

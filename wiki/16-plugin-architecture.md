@@ -1,22 +1,32 @@
-# Plugin architecture — Phases 1, 2, 3
+# Plugin architecture
 
-Plugins now live in two places: **in-process** (core + drop-ins
-under `plugins-extra/`) and **HTTP-transport** (separate containers
+**Audience:** developers writing plugins, and devops folk installing
+or operating them.
+
+Plugins live in two places: **in-process** (core + drop-ins under
+`plugins-extra/`) and **HTTP-transport** (separate containers
 exposing a small four-endpoint contract). Both kinds register in
 the same `plugins` DB table; the engine dispatches based on
 `transport_kind`.
 
-- **Phase 1** (shipped): DB-backed registry + HTTP transport + one
-  example external plugin authored without an SDK.
-- **Phase 2** (shipped): `@daisy-dag/plugin-sdk` (drops author
-  boilerplate from ~170 to ~25 lines) + admin Plugins page in the
-  frontend (install / enable / disable / uninstall / refresh).
-- **Phase 3** (shipped): multi-version side-by-side, `name@version`
-  action pinning, marketplace catalog browse, checksum-verified
-  install, and a background healthcheck poller. See
-  [Phase 3 specifics](#phase-3-specifics) below.
+The system grew in four phases — each one is documented here:
 
-The existing in-process plugin path is unchanged.
+- **Phase 1**: DB-backed registry + HTTP transport + one example
+  external plugin authored without an SDK.
+- **Phase 2**: `@daisy-dag/plugin-sdk` (drops author boilerplate
+  from ~170 to ~25 lines) + admin Plugins page in the frontend
+  (install / enable / disable / uninstall / refresh).
+- **Phase 3**: multi-version side-by-side, `name@version` action
+  pinning, marketplace catalog browse, SHA-256 checksum-verified
+  install, and a background `/readyz` healthcheck poller. See
+  [Phase 3 specifics](#phase-3-specifics).
+- **Phase 4**: LLM-driven plugin generator — admins describe a
+  plugin in English on the Plugins page, the agent emits a complete
+  scaffold + deploy instructions, the admin reviews and downloads.
+  See the [Plugin-generator agent](#plugin-generator-agent-ask-agent)
+  section.
+
+The existing in-process plugin path is unchanged across all phases.
 
 ## The four-endpoint contract
 
