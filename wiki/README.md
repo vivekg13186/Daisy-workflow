@@ -11,6 +11,8 @@ A JSON-defined DAG workflow engine with a drag-and-drop visual editor, pluggable
 5. [Configs encryption](./05-configs-encryption.md) — KMS envelope encryption, providers, rotation, audit.
 6. [Auth & authorization](./06-auth.md) — local accounts, OIDC, roles, multi-workspace, token rotation.
 7. [Execution limits](./07-execution-limits.md) — wall-clock timeouts, retry cap, layered defaults.
+8. [Retention](./08-retention.md) — daily Postgres prune for executions, refresh tokens, history.
+9. [Backups](./09-backups.md) — pg_dump + restore scripts, docker overlay, runbook for 3 deployment shapes.
 
 ## Quick links
 

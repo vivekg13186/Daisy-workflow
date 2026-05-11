@@ -30,6 +30,7 @@ import {
   withTimeout,
   WorkflowTimeoutError,
 } from "./engine/limits.js";
+import { start as startRetention, stop as stopRetention } from "./retention/runner.js";
 
 await loadBuiltins();
 await loadTriggerBuiltins();
@@ -45,6 +46,12 @@ startTriggerManager().catch(e => log.error("trigger manager start failed", { err
 bootstrapAdmin()
   .then((res) => { if (res?.action === "created") log.info("admin bootstrapped", res); })
   .catch((e)  => log.error("admin bootstrap failed", { error: e.message }));
+
+// Retention scheduler. No-op when RETENTION_ENABLED is unset/false.
+// Opt-in so a dev environment doesn't quietly nuke local executions
+// while engineers are debugging.
+try { startRetention(); }
+catch (e) { log.warn("retention start failed", { error: e.message }); }
 
 // Reap any execution rows left in `running` from a previous crash. We
 // don't know what BullMQ has in flight at this exact moment, but a fresh
@@ -325,6 +332,7 @@ worker.on("failed", (job, err) => {
 worker.on("ready", () => log.info("worker ready", { concurrency: config.workerConcurrency }));
 
 process.on("SIGTERM", async () => {
+  stopRetention();
   await stopTriggerManager();
   await worker.close();
   process.exit(0);

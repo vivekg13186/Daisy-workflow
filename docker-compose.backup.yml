@@ -1,0 +1,76 @@
+# Optional overlay — daily Postgres backups via a tiny cron sidecar.
+#
+# Usage:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.backup.yml up -d
+#
+# Adds one container, `daisy-backup`, that runs the backup.sh script
+# on a configurable cron expression. The dumps land in a named volume
+# (or, with BACKUP_S3_BUCKET set, also get pushed to S3).
+#
+# Why a separate container instead of running backup.sh from the
+# backend image:
+#   • Keeps pg_dump + aws CLI out of the app image (smaller deploys).
+#   • Survives backend restarts — the cron daemon isn't tied to the
+#     app's BullMQ worker lifecycle.
+#   • Lets you scale backend independently without firing N parallel
+#     backups every night.
+#
+# Notes:
+#   • The image used here is `postgres:16-alpine` so the pg_dump
+#     binary matches the server. Bumping the server version means
+#     bumping this image — `pg_dump --version` and the server
+#     version should track within a major.
+#   • S3 upload requires either AWS creds via env or an IAM role on
+#     the host. Out of scope for compose; set AWS_* envs explicitly
+#     in your deploy.
+#   • The sidecar reads DATABASE_URL the same way the backend does
+#     (the env-file in this compose) so the two stay in sync.
+
+services:
+  daisy-backup:
+    image: postgres:16-alpine
+    container_name: daisy-backup
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Inside the docker network the DB host is `postgres`, not
+      # localhost — override the dev DATABASE_URL accordingly.
+      DATABASE_URL: postgres://dag:dag@postgres:5432/dag_engine
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_LOCAL: "${BACKUP_RETENTION_LOCAL:-14}"
+      BACKUP_GZIP: "${BACKUP_GZIP:-true}"
+      BACKUP_S3_BUCKET: "${BACKUP_S3_BUCKET:-}"
+      BACKUP_GPG_RECIPIENT: "${BACKUP_GPG_RECIPIENT:-}"
+      BACKUP_CRON: "${BACKUP_CRON:-0 3 * * *}"
+      # AWS creds — only relevant when BACKUP_S3_BUCKET is set.
+      # Prefer IAM role / instance metadata in real deployments.
+      AWS_ACCESS_KEY_ID:     "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_REGION:            "${AWS_REGION:-us-east-1}"
+    volumes:
+      - daisy_backups:/backups
+      - ./backend/scripts:/scripts:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        # Install dependencies once on first boot. apk is fast +
+        # cached after the first run; the alternative (a custom
+        # built image) would have to be re-pushed every time the
+        # base bumps a patch level.
+        apk add --no-cache bash gzip gpg ca-certificates aws-cli >/dev/null
+        echo "[backup-sidecar] crond ready. schedule: $$BACKUP_CRON"
+        # Write the cron entry. Cron in busybox needs the line in
+        # /etc/crontabs/root + STDOUT goes nowhere by default, so
+        # we tee it to docker logs.
+        mkdir -p /etc/crontabs
+        cat > /etc/crontabs/root <<EOF
+        $$BACKUP_CRON  bash /scripts/backup.sh >> /proc/1/fd/1 2>&1
+        EOF
+        crond -f -d 8
+
+volumes:
+  daisy_backups:
