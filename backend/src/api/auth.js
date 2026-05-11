@@ -32,6 +32,7 @@ import {
   refreshCookieOptions,
 } from "../auth/tokens.js";
 import { requireUser } from "../middleware/auth.js";
+import { limiters } from "../middleware/rateLimit.js";
 
 const router = Router();
 
@@ -86,8 +87,12 @@ router.get("/config", (_req, res) => {
 
 // ────────────────────────────────────────────────────────────────────
 // POST /auth/login   { email, password }
+//
+// Two limiters: per-IP catches a flood from a single attacker;
+// per-email catches credential-stuffing across rotating proxies
+// (same target email, different IPs).
 // ────────────────────────────────────────────────────────────────────
-router.post("/login", async (req, res, next) => {
+router.post("/login", limiters.login, limiters.loginByEmail, async (req, res, next) => {
   try {
     const { email, password } = req.body || {};
     if (typeof email !== "string" || typeof password !== "string") {
@@ -124,7 +129,7 @@ router.post("/login", async (req, res, next) => {
 // one, marks the old revoked + chained), and hands back a fresh
 // access JWT. Theft-replay protection lives in consumeRefreshToken().
 // ────────────────────────────────────────────────────────────────────
-router.post("/refresh", async (req, res, next) => {
+router.post("/refresh", limiters.refresh, async (req, res, next) => {
   try {
     const presented = req.cookies?.[REFRESH_COOKIE];
     if (!presented) throw new UnauthorizedError("missing refresh cookie");

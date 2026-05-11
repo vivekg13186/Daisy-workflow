@@ -14,6 +14,7 @@ A JSON-defined DAG workflow engine with a drag-and-drop visual editor, pluggable
 8. [Retention](./08-retention.md) — daily Postgres prune for executions, refresh tokens, history.
 9. [Backups](./09-backups.md) — pg_dump + restore scripts, docker overlay, runbook for 3 deployment shapes.
 10. [Health probes](./10-health-probes.md) — `/healthz` + `/readyz` on API + worker, k8s + compose examples.
+11. [Rate limiting](./11-rate-limiting.md) — per-IP, per-user, per-email budgets backed by Redis.
 
 ## Quick links
 

@@ -34,6 +34,7 @@ import { triggerRegistry } from "../triggers/registry.js";
 import { syncTrigger } from "../triggers/manager.js";
 import { ValidationError, HttpError } from "../utils/errors.js";
 import { requireUser, requireRole } from "../middleware/auth.js";
+import { limiters } from "../middleware/rateLimit.js";
 
 const router = Router();
 
@@ -72,7 +73,7 @@ router.get("/status", requireRole("admin", "editor", "viewer"), (_req, res) => {
 // /chat — the legacy single-shot endpoint. Still wired up so older clients
 // (and the JSON-tab "Ask AI" button) keep working.
 // ──────────────────────────────────────────────────────────────────────
-router.post("/chat", requireRole("admin", "editor"), async (req, res, next) => {
+router.post("/chat", limiters.ai, requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { messages } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -99,7 +100,7 @@ router.post("/chat", requireRole("admin", "editor"), async (req, res, next) => {
 // text reply plus any side-effects that fired during the loop (proposed
 // graph, created trigger, ordered trace of every tool call).
 // ──────────────────────────────────────────────────────────────────────
-router.post("/agent/chat", requireRole("admin", "editor"), async (req, res, next) => {
+router.post("/agent/chat", limiters.ai, requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { messages, graphId, currentGraph } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {

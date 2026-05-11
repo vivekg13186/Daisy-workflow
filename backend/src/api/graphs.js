@@ -35,6 +35,7 @@ import { parseDag } from "../dsl/parser.js";
 import { enqueueExecution } from "../queue/queue.js";
 import { NotFoundError, ValidationError } from "../utils/errors.js";
 import { requireUser, requireRole } from "../middleware/auth.js";
+import { limiters } from "../middleware/rateLimit.js";
 
 // `dsl` is the canonical body field. Older clients still posting `yaml`
 // keep working — we accept either here and treat the contents as JSON.
@@ -264,7 +265,7 @@ router.post("/:id/archives/:archiveId/restore", requireRole("admin", "editor"), 
 // Execution
 // ──────────────────────────────────────────────────────────────────────
 
-router.post("/:id/execute", requireRole("admin", "editor"), async (req, res, next) => {
+router.post("/:id/execute", limiters.execute, requireRole("admin", "editor"), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       "SELECT id FROM graphs WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL",

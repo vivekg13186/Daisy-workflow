@@ -13,6 +13,7 @@ import { log } from "./utils/logger.js";
 import { HttpError } from "./utils/errors.js";
 import { loadBuiltins } from "./plugins/registry.js";
 import { readiness } from "./health/checks.js";
+import { limiters } from "./middleware/rateLimit.js";
 import authRouter from "./api/auth.js";
 import usersRouter from "./api/users.js";
 import workspacesRouter from "./api/workspaces.js";
@@ -42,29 +43,30 @@ app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 app.use(morgan("tiny"));
 
-// ──────────────────────────────────────────────────────────────────────
-// Health probes — public (no auth) by design. K8s, load balancers,
-// and uptime monitors hit these on a tight cadence and don't carry
-// auth headers.
-//
-//   GET /health     legacy summary; kept for back-compat with anything
-//                   that already polls it.
-//   GET /healthz    liveness — returns 200 as long as the process is
-//                   responding. Used by k8s to decide "should I
-//                   restart the container?". Must be cheap and never
-//                   fail because of a transient downstream blip; a
-//                   liveness flap = a restart loop.
-//   GET /readyz     readiness — returns 200 only when the process can
-//                   actually serve traffic (DB + Redis reachable in
-//                   bounded time). 503 with a JSON body otherwise so
-//                   the LB can take the instance out of rotation.
-// ──────────────────────────────────────────────────────────────────────
+// Trust the first hop's X-Forwarded-* headers so req.ip is the
+// real client IP when Daisy sits behind nginx / a load balancer.
+// Without this, every request appears to come from the proxy and
+// IP-based rate limits become essentially a single shared bucket.
+// One hop is the typical edge-proxy depth; bump if you have more
+// layers (e.g. Cloudflare → ELB → API = 2).
+app.set("trust proxy", parseInt(process.env.TRUST_PROXY_HOPS || "1", 10));
+
+// Global per-IP rate limit, applied before any route resolution so
+// even a 404 contributes to the bucket. Health probes are mounted
+// BEFORE this so monitoring agents probing once/second don't get
+// throttled.
 app.get("/health",  (_req, res) => res.json({ ok: true, env: config.env }));
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.get("/readyz",  async (_req, res) => {
   const { ok, checks } = await readiness();
   res.status(ok ? 200 : 503).json({ ok, checks });
 });
+
+app.use(limiters.global);
+
+// (Health probes are mounted just above the global rate-limit
+// middleware so monitoring agents probing once/second don't get
+// throttled. See the trust-proxy block.)
 
 // Auth lives BEFORE the protected routes — and is itself unprotected
 // at the router level (login/refresh are public; /me uses requireUser

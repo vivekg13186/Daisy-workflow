@@ -12,10 +12,16 @@ import { v4 as uuid } from "uuid";
 import { pool } from "../db/pool.js";
 import { enqueueExecution } from "../queue/queue.js";
 import { log } from "../utils/logger.js";
+import { limiters } from "../middleware/rateLimit.js";
 
 const router = Router();
 
-router.all("/:id", async (req, res, next) => {
+// Public endpoint — apply the webhook-specific limiter on every
+// method. The keygen buckets by (webhook id, IP) so:
+//   • One malicious IP can't flood a single webhook.
+//   • One webhook ID receiving traffic from many IPs (legit fan-in
+//     from a SaaS sending webhooks) isn't penalised.
+router.all("/:id", limiters.webhook, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       "SELECT * FROM triggers WHERE id=$1 AND type='webhook'",
