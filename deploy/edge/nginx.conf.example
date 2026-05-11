@@ -1,0 +1,152 @@
+# Reverse-proxy + TLS terminator for Daisy-DAG running on a single VM.
+#
+# Drop this file in /etc/nginx/sites-available/daisy and symlink into
+# sites-enabled. Reload nginx (`nginx -s reload`).
+#
+# Prereqs:
+#   • A real TLS cert. Easiest path: certbot + Let's Encrypt:
+#       sudo certbot --nginx -d daisy.example.com
+#     That edits this file in place to add the cert paths + the
+#     mandatory http→https redirect block.
+#   • A daisy backend running on 127.0.0.1:3000 (the bundled
+#     docker-compose.yml exposes it there by default).
+#   • A frontend asset bundle in /var/www/daisy/ (npm run build →
+#     ship dist/ to that path).
+#
+# What this config provides:
+#   • TLS termination with modern cipher suites + HSTS.
+#   • Security headers (CSP, X-Frame, X-Content-Type-Options, …).
+#   • WebSocket upgrade for /ws (Daisy's live execution channel).
+#   • Body-size cap matching express.json's 1mb limit.
+#   • Gzip compression for JSON + static assets.
+#   • Client-IP forwarding so Daisy's rate limiter sees the real IP
+#     (TRUST_PROXY_HOPS=1 in backend/.env).
+
+# ---------- HTTP → HTTPS redirect (certbot will fill this in) ------
+server {
+    listen 80;
+    listen [::]:80;
+    server_name daisy.example.com;
+
+    # Let certbot's --webroot challenge work alongside the redirect.
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ---------- HTTPS ----------
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name daisy.example.com;
+
+    # ----- TLS -----
+    ssl_certificate     /etc/letsencrypt/live/daisy.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/daisy.example.com/privkey.pem;
+
+    # Mozilla "intermediate" — broad client support, no weak ciphers.
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # OCSP stapling — cheap robustness win.
+    ssl_stapling on;
+    ssl_stapling_verify on;
+
+    # ----- Security headers -----
+    # HSTS — once you're confident TLS won't break, raise max-age to a year
+    # and consider preloading via hstspreload.org.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options           "DENY"                                always;
+    add_header X-Content-Type-Options    "nosniff"                             always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin"     always;
+    add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()" always;
+    # A practical CSP. Daisy's frontend uses inline styles for Vue-Flow +
+    # Quasar dynamic theming; the 'unsafe-inline' is needed for those.
+    # Tighten further once you've audited which inline rules you actually
+    # need (csp-evaluator.withgoogle.com helps).
+    add_header Content-Security-Policy   "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none'" always;
+
+    # ----- Body size -----
+    # Match backend express.json({ limit: "1mb" }). Bumps to 10MB only if
+    # users start uploading large CSVs through the editor; keep tight
+    # otherwise as DoS protection.
+    client_max_body_size 1m;
+
+    # ----- gzip -----
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_comp_level 5;
+    gzip_types
+        application/json
+        application/javascript
+        application/xml
+        text/css
+        text/html
+        text/plain
+        text/xml
+        image/svg+xml;
+
+    # ----- Frontend (static bundle) -----
+    root /var/www/daisy;
+    index index.html;
+
+    # Long cache for hashed assets, no cache for index.html.
+    location ~* \.(?:js|css|png|jpg|jpeg|svg|gif|woff2?)$ {
+        expires 1y;
+        access_log off;
+        add_header Cache-Control "public, immutable";
+    }
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache" always;
+    }
+
+    # ----- API (HTTP) -----
+    location /api/ {
+        # Backend serves itself at /auth /graphs /executions etc. — no
+        # /api prefix — so rewrite to strip it before proxying.
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        # Don't buffer streaming responses (agent SSE, /ai/agent/chat).
+        proxy_buffering    off;
+        proxy_read_timeout 5m;            # match EXECUTION_DEFAULT_WORKFLOW_TIMEOUT
+    }
+
+    # ----- WebSocket (live executions) -----
+    location /ws {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade           $http_upgrade;
+        proxy_set_header   Connection        "upgrade";
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1d;            # long-lived; only drops on idle
+    }
+
+    # ----- Public webhook receivers (no /api prefix) -----
+    # External services hit /webhooks/<id> directly. Forward as-is.
+    location /webhooks/ {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}

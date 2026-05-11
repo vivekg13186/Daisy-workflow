@@ -33,6 +33,7 @@ import {
   maskSecrets,
 } from "../configs/registry.js";
 import { requireUser, requireRole } from "../middleware/auth.js";
+import { auditLog } from "../audit/log.js";
 
 const router = Router();
 
@@ -131,6 +132,11 @@ router.post("/", requireRole("admin"), async (req, res, next) => {
       if (e.code === "23505") throw new ValidationError(`config name "${name}" already exists`);
       throw e;
     }
+    await auditLog({
+      req, action: "config.create",
+      resource: { type: "config", id, name },
+      metadata: { configType: type },
+    });
     res.status(201).json({ id, name });
   } catch (e) { next(e); }
 });
@@ -200,6 +206,10 @@ router.put("/:id", requireRole("admin"), async (req, res, next) => {
       if (e.code === "23505") throw new ValidationError(`config name "${name}" already exists`);
       throw e;
     }
+    await auditLog({
+      req, action: "config.update",
+      resource: { type: "config", id: req.params.id, name: name ?? existing.name },
+    });
     res.json({ id: req.params.id, updated: true });
   } catch (e) { next(e); }
 });
@@ -254,6 +264,15 @@ router.post("/:id/rotate", requireRole("admin"), async (req, res, next) => {
         WHERE id = $1 AND workspace_id = $5`,
       [existing.id, JSON.stringify(stored), encryption_version, kek_id, req.user.workspaceId, req.user.id],
     );
+    await auditLog({
+      req, action: "config.rotate",
+      resource: { type: "config", id: existing.id, name: existing.name },
+      metadata: {
+        from_version: existing.encryption_version,
+        to_version:   encryption_version,
+        kek_id,
+      },
+    });
     res.json({
       id: existing.id,
       rotated: true,
@@ -274,6 +293,10 @@ router.delete("/:id", requireRole("admin"), async (req, res, next) => {
       [req.params.id, req.user.workspaceId],
     );
     if (rowCount === 0) throw new NotFoundError("config");
+    await auditLog({
+      req, action: "config.delete",
+      resource: { type: "config", id: req.params.id },
+    });
     res.status(200).json({ ok: true, id: req.params.id, deleted: "config" });
   } catch (e) { next(e); }
 });

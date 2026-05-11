@@ -1,0 +1,53 @@
+# Notification routing — which contact points each alert ends up at.
+#
+# The routing tree below mirrors a common pattern:
+#
+#   severity=critical → PagerDuty (wake somebody up)
+#   severity=warning  → Slack
+#   severity=info     → Slack but grouped + delayed (digest-ish)
+#
+# Two knobs worth knowing:
+#
+#   • groupWait — how long to wait for additional alerts to join an
+#     ongoing notification before sending. Avoids spam when 5 alerts
+#     fire in 10 seconds.
+#   • groupInterval — once a group has been sent, how long to wait
+#     before sending the NEXT bundled update.
+#   • repeatInterval — how often to resend an alert that's still
+#     firing. 4h is sane for critical; longer for warnings so the
+#     team doesn't tune them out.
+#
+# The default contact point is "default-receiver" (Slack-warning).
+# Anything that doesn't match a child route falls through to it.
+
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: default-receiver
+    group_by:        ['alertname', 'severity']
+    group_wait:      30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      # Critical alerts page someone.
+      - receiver: oncall-pager
+        matchers:
+          - severity = critical
+        group_wait:      0s            # don't batch critical alerts
+        group_interval: 1m
+        repeat_interval: 1h
+        continue: false                # don't ALSO Slack a critical
+
+      # Warnings → Slack. Default group config is fine.
+      - receiver: default-receiver
+        matchers:
+          - severity = warning
+
+      # Info → email-digest (rolled-up, no Slack noise).
+      - receiver: email-digest
+        matchers:
+          - severity = info
+        group_wait:      10m
+        group_interval: 30m
+        repeat_interval: 12h

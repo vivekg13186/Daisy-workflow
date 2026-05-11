@@ -1,0 +1,83 @@
+# Caddy reverse proxy for Daisy-DAG.
+#
+# Caddy is the simpler alternative to nginx for the "one VM, one
+# domain" case: it does automatic Let's Encrypt cert provisioning +
+# renewal without certbot, ships modern TLS defaults out of the box,
+# and the config is roughly 30 lines instead of 130.
+#
+# Usage:
+#
+#   1. Point your DNS A/AAAA record at the host.
+#   2. Drop this file at /etc/caddy/Caddyfile (rename, fill in domain).
+#   3. systemctl restart caddy
+#
+# Or use it via docker — see docker-compose.tls.yml at repo root.
+
+daisy.example.com {
+    # ----- TLS (automatic) -----
+    # Caddy provisions a Let's Encrypt cert on first start. No further
+    # config needed for a single domain. For wildcards / DNS-01, see
+    # caddyserver.com/docs/automatic-https.
+
+    # ----- Security headers -----
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Frame-Options           "DENY"
+        X-Content-Type-Options    "nosniff"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+        Permissions-Policy        "geolocation=(), microphone=(), camera=()"
+        Content-Security-Policy   "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none'"
+        # Strip any X-Powered-By the backend might emit.
+        -Server
+    }
+
+    # ----- Body size -----
+    request_body {
+        max_size 1MB
+    }
+
+    # ----- Gzip / Brotli -----
+    encode gzip zstd
+
+    # ----- Static frontend bundle -----
+    handle /assets/* {
+        root * /var/www/daisy
+        file_server
+        header Cache-Control "public, max-age=31536000, immutable"
+    }
+
+    # ----- API -----
+    # Backend serves at /auth /graphs etc — strip the /api prefix
+    # we use from the frontend before proxying.
+    handle_path /api/* {
+        reverse_proxy 127.0.0.1:3000 {
+            transport http {
+                response_header_timeout 5m
+            }
+            header_up X-Forwarded-For   {remote}
+            header_up X-Forwarded-Proto {scheme}
+            flush_interval -1                  # don't buffer streaming responses
+        }
+    }
+
+    # ----- WebSocket (live executions) -----
+    @ws path /ws*
+    reverse_proxy @ws 127.0.0.1:3000 {
+        transport http {
+            read_timeout 24h
+        }
+    }
+
+    # ----- Public webhooks (no /api prefix) -----
+    handle /webhooks/* {
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    # ----- SPA fallback for everything else -----
+    handle {
+        root * /var/www/daisy
+        try_files {path} /index.html
+        file_server
+        header Cache-Control "no-cache"
+    }
+}

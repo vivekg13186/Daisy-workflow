@@ -28,6 +28,7 @@ import {
   pruneExecutions,
   pruneRefreshTokens,
   pruneConversationHistory,
+  pruneAuditLogs,
 } from "./policies.js";
 
 const tracer = trace.getTracer("daisy-dag.retention");
@@ -56,6 +57,10 @@ const CONFIG = Object.freeze({
   failedDays:  intEnv("RETENTION_EXECUTIONS_FAILED_DAYS",  180),
   refreshTokenDays: intEnv("RETENTION_REFRESH_TOKENS_DAYS", 30),
   historyTurns: intEnv("RETENTION_HISTORY_TURNS_PER_CONVERSATION", 100),
+  // Audit logs are kept longer by default — typical compliance
+  // ask is "at least 12 months of access logs." Bump higher for
+  // SOC2 / HIPAA / regulated industries.
+  auditLogDays: intEnv("RETENTION_AUDIT_LOG_DAYS", 365),
   batchLimit:   intEnv("RETENTION_BATCH_LIMIT", 50_000),
   maxPasses:    intEnv("RETENTION_MAX_PASSES",  20),    // ~1M rows per nightly run at default
 });
@@ -77,6 +82,7 @@ export async function runAll() {
       executions:    { successDeleted: 0, failedDeleted: 0, total: 0, passes: 0 },
       refreshTokens: { deleted: 0,  passes: 0 },
       history:       { deleted: 0,  passes: 0 },
+      auditLogs:     { deleted: 0,  passes: 0 },
       errors:        [],
     };
     try {
@@ -118,6 +124,17 @@ export async function runAll() {
         return n >= CONFIG.batchLimit;
       }, CONFIG.maxPasses, "pruneConversationHistory", result);
 
+      // 4. Audit logs — longer window, bounded passes.
+      await drainPass(async () => {
+        const n = await pruneAuditLogs({
+          days:  CONFIG.auditLogDays,
+          limit: CONFIG.batchLimit,
+        });
+        result.auditLogs.deleted += n;
+        result.auditLogs.passes++;
+        return n >= CONFIG.batchLimit;
+      }, CONFIG.maxPasses, "pruneAuditLogs", result);
+
       span.setStatus({ code: SpanStatusCode.OK });
     } catch (e) {
       span.recordException(e);
@@ -133,6 +150,7 @@ export async function runAll() {
       executions:    result.executions,
       refreshTokens: result.refreshTokens,
       history:       result.history,
+      auditLogs:     result.auditLogs,
       errors:        result.errors.length,
     });
     return result;

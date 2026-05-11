@@ -1,0 +1,254 @@
+# Grafana alert rules — provisioned at boot from the alerts/ folder.
+#
+# The rules query the same Postgres datasource the overview dashboard
+# uses (uid: postgres). Each rule has a sensible severity label
+# (critical / warning / info) so notification-policies.yml can route
+# critical to PagerDuty + warning to Slack without touching this file.
+#
+# Why these specific rules:
+#
+#   • high-failure-rate — the single biggest "something is wrong"
+#     signal. >10% executions failed in 10 minutes, with a minimum
+#     traffic floor so a low-traffic period doesn't trip on 1/3 = 33%.
+#
+#   • p99-latency — performance regression detector. Bumps fire
+#     when a recent code change or upstream slowdown drags p99 above
+#     60 seconds, well before users complain.
+#
+#   • queue-backlog — capacity warning. >50 executions sitting in
+#     queued/running for 5 minutes means the worker pool can't keep
+#     up with intake. Either scale workers or examine slow nodes.
+#
+#   • stale-running — durability check. A row in `running` for more
+#     than 30 minutes is almost certainly a crashed worker that
+#     never got reaped. reapOrphanedExecutions runs on worker boot,
+#     so this only fires if no worker has booted in 30 min.
+#
+#   • deadman — the "is anything happening at all?" check. Zero
+#     executions in 30 minutes during a workspace's expected
+#     working hours is suspicious. Hostile to workspaces that
+#     legitimately run once a day; tune the window per-deploy.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: daisy-dag
+    folder: Daisy-DAG
+    interval: 1m
+    rules:
+
+      # ──────────────────────────────────────────────────────────────
+      - uid: daisy_high_failure_rate
+        title: "Daisy: high execution failure rate"
+        condition: C
+        # 10-minute window with a traffic-floor guard. We compare
+        # failed/total against 0.10 only when total >= 10, so a
+        # quiet workspace can't false-positive on 1-failure-out-of-1.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }   # last 10 min
+            datasourceUid: postgres
+            model:
+              refId: A
+              format: table
+              rawSql: |
+                SELECT
+                  count(*)                                    AS total,
+                  count(*) FILTER (WHERE status = 'failed')   AS failed,
+                  CASE WHEN count(*) >= 10
+                       THEN (count(*) FILTER (WHERE status = 'failed'))::float
+                            / NULLIF(count(*), 0)
+                       ELSE 0
+                  END                                         AS failure_rate
+                FROM executions
+                WHERE created_at > NOW() - INTERVAL '10 minutes'
+                  AND status IN ('success', 'failed')
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.10] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        labels:
+          severity: critical
+          team: workflow-engine
+        annotations:
+          summary: "Failure rate above 10% over the last 10 minutes"
+          description: |
+            More than 10% of executions failed in the last 10 minutes.
+            Check the Inspector for the most recent failed runs and the
+            Tempo traces linked from each.
+
+      # ──────────────────────────────────────────────────────────────
+      - uid: daisy_p99_latency_high
+        title: "Daisy: p99 execution latency above 60s"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }   # last 15 min
+            datasourceUid: postgres
+            model:
+              refId: A
+              format: table
+              rawSql: |
+                SELECT
+                  percentile_cont(0.99) WITHIN GROUP (
+                    ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000
+                  ) AS p99_ms
+                FROM executions
+                WHERE finished_at IS NOT NULL
+                  AND started_at  IS NOT NULL
+                  AND finished_at > NOW() - INTERVAL '15 minutes'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [60000] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+        noDataState: OK
+        execErrState: Alerting
+        for: 10m
+        labels:
+          severity: warning
+          team: workflow-engine
+        annotations:
+          summary: "p99 execution latency > 60s (15-min window)"
+          description: |
+            The 99th-percentile end-to-end execution time is above 60
+            seconds. Often a sign of a single slow node holding things
+            up — check the Tempo `workflow.run` spans in the same window.
+
+      # ──────────────────────────────────────────────────────────────
+      - uid: daisy_queue_backlog
+        title: "Daisy: queue backlog (>50 queued+running)"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: postgres
+            model:
+              refId: A
+              format: table
+              rawSql: |
+                SELECT count(*)::int AS in_flight
+                  FROM executions
+                 WHERE status IN ('queued', 'running')
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [50] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        labels:
+          severity: warning
+          team: workflow-engine
+        annotations:
+          summary: "More than 50 executions queued+running"
+          description: |
+            Worker pool isn't keeping up with intake. Scale
+            WORKER_CONCURRENCY (env) or check for a stuck node
+            holding workers hostage.
+
+      # ──────────────────────────────────────────────────────────────
+      - uid: daisy_stale_running
+        title: "Daisy: stale `running` executions (>30 min)"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: postgres
+            model:
+              refId: A
+              format: table
+              rawSql: |
+                SELECT count(*)::int AS stale
+                  FROM executions
+                 WHERE status      = 'running'
+                   AND started_at  < NOW() - INTERVAL '30 minutes'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        labels:
+          severity: critical
+          team: workflow-engine
+        annotations:
+          summary: "Execution(s) stuck in `running` for >30 minutes"
+          description: |
+            Usually means a worker crashed without finishing the row.
+            reapOrphanedExecutions runs on worker boot, so this only
+            fires if no worker has booted recently — investigate the
+            worker process / k8s pod restarts.
+
+      # ──────────────────────────────────────────────────────────────
+      - uid: daisy_deadman
+        title: "Daisy: no executions in last 30 minutes"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1800, to: 0 }
+            datasourceUid: postgres
+            model:
+              refId: A
+              format: table
+              rawSql: |
+                SELECT count(*)::int AS n
+                  FROM executions
+                 WHERE created_at > NOW() - INTERVAL '30 minutes'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 10m
+        labels:
+          severity: info
+          team: workflow-engine
+        annotations:
+          summary: "Zero executions in the last 30 minutes"
+          description: |
+            The engine hasn't run anything in half an hour. If your
+            workspace is normally idle this is just background noise;
+            silence it or tune the threshold. If you expect continuous
+            traffic, this is a "the workflow source died" signal —
+            check triggers and webhooks.

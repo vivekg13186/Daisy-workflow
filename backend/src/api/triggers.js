@@ -18,6 +18,7 @@ import { triggerRegistry } from "../triggers/registry.js";
 import { syncTrigger, activeCount } from "../triggers/manager.js";
 import { ValidationError, NotFoundError } from "../utils/errors.js";
 import { requireUser, requireRole } from "../middleware/auth.js";
+import { auditLog } from "../audit/log.js";
 
 const router = Router();
 router.use(requireUser);
@@ -81,6 +82,11 @@ router.post("/", requireRole("admin", "editor"), async (req, res, next) => {
       [id, name, graphId, type, JSON.stringify(config), Boolean(enabled), req.user.workspaceId, req.user.id],
     );
     if (enabled) await syncTrigger(id);
+    await auditLog({
+      req, action: "trigger.create",
+      resource: { type: "trigger", id, name },
+      metadata: { triggerType: type, graphId, enabled: Boolean(enabled) },
+    });
     res.status(201).json({ id });
   } catch (e) { next(e); }
 });
@@ -114,6 +120,11 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res, next) => {
     );
 
     await syncTrigger(req.params.id);
+    await auditLog({
+      req, action: "trigger.update",
+      resource: { type: "trigger", id: req.params.id, name: name },
+      metadata: { changes: { name, config, enabled } },
+    });
     res.json({ id: req.params.id, updated: true });
   } catch (e) { next(e); }
 });
@@ -126,6 +137,10 @@ router.delete("/:id", requireRole("admin", "editor"), async (req, res, next) => 
     );
     if (rowCount === 0) throw new NotFoundError("trigger");
     await syncTrigger(req.params.id);   // will stop the live subscription
+    await auditLog({
+      req, action: "trigger.delete",
+      resource: { type: "trigger", id: req.params.id },
+    });
     res.status(200).json({ ok: true, id: req.params.id, deleted: "trigger" });
   } catch (e) { next(e); }
 });

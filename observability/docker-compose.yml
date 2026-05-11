@@ -43,6 +43,11 @@ services:
       - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
       - ./grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
       - ./dashboards:/var/lib/grafana/dashboards:ro
+      # Alerting provisioning. Grafana loads every *.yml here at boot.
+      # `rules.yml` ships the default rules; `notification-policies.yml`
+      # routes them; `contact-points.yml` (gitignored — operator
+      # creates from the .example) holds the webhook URLs.
+      - ./alerts:/etc/grafana/provisioning/alerting:ro
       - grafana-data:/var/lib/grafana
     ports:
       - "3001:3000"   # Daisy's API uses 3000 — keep Grafana on 3001

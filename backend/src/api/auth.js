@@ -33,6 +33,7 @@ import {
 } from "../auth/tokens.js";
 import { requireUser } from "../middleware/auth.js";
 import { limiters } from "../middleware/rateLimit.js";
+import { auditLog } from "../audit/log.js";
 
 const router = Router();
 
@@ -102,6 +103,14 @@ router.post("/login", limiters.login, limiters.loginByEmail, async (req, res, ne
     const ok = u && u.password_hash && await verify(password, u.password_hash);
     if (!ok) {
       log.warn("login failed", { email });
+      // Audit the failure with the attempted email — useful for
+      // spotting credential-stuffing patterns across IPs even if
+      // the email doesn't correspond to a real user.
+      await auditLog({
+        req, action: "auth.login", outcome: "failed",
+        actor: { email: String(email || "").toLowerCase() },
+        metadata: { reason: u ? "bad-password" : "no-user" },
+      });
       // Single 401 shape regardless of which check failed.
       throw new UnauthorizedError("invalid credentials");
     }
@@ -116,6 +125,11 @@ router.post("/login", limiters.login, limiters.loginByEmail, async (req, res, ne
 
     await pool.query("UPDATE users SET last_login_at = NOW() WHERE id=$1", [u.id]);
     log.info("login ok", { userId: u.id, email: u.email });
+    await auditLog({
+      req, action: "auth.login",
+      actor: { id: u.id, email: u.email, role: u.role },
+      workspaceId: u.workspace_id,
+    });
 
     const tokens = await issueTokensFor(req, res, u);
     res.json(tokens);
@@ -137,7 +151,13 @@ router.post("/refresh", limiters.refresh, async (req, res, next) => {
     const consumed = await consumeRefreshToken(presented);
     if (!consumed) {
       // Either expired, revoked, or theft-replay (consume already
-      // burned the user's chain in that case).
+      // burned the user's chain in that case). Audit either way —
+      // a rejected refresh is interesting when investigating a
+      // session-hijack scenario.
+      await auditLog({
+        req, action: "auth.refresh", outcome: "failed",
+        metadata: { reason: "invalid-or-theft-replay" },
+      });
       res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
       throw new UnauthorizedError("refresh token invalid");
     }
@@ -185,6 +205,7 @@ router.post("/logout", async (req, res, next) => {
     const presented = req.cookies?.[REFRESH_COOKIE];
     if (presented) await revokeRefreshToken(presented);
     res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
+    await auditLog({ req, action: "auth.logout" });
     res.status(204).end();
   } catch (e) { next(e); }
 });
@@ -346,6 +367,12 @@ router.get("/oidc/callback", async (req, res, next) => {
 
     await pool.query("UPDATE users SET last_login_at=NOW() WHERE id=$1", [user.id]);
     log.info("oidc login ok", { userId: user.id, email: user.email });
+    await auditLog({
+      req, action: "auth.oidc.login",
+      actor: { id: user.id, email: user.email, role: user.role },
+      workspaceId: user.workspace_id,
+      metadata: { sub },
+    });
 
     // Issue Daisy tokens. We set the refresh cookie and bounce back
     // to the SPA at /login?oidc=done&next=…; the LoginPage hook calls

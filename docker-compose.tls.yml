@@ -1,0 +1,77 @@
+# TLS edge — drop-in Caddy reverse proxy for the bundled stack.
+#
+# Usage:
+#
+#   export DAISY_DOMAIN=daisy.example.com
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.tls.yml \
+#     --profile full \
+#     up -d
+#
+# What it adds:
+#   • A Caddy container that listens on 80/443, auto-provisions a
+#     Let's Encrypt cert for $DAISY_DOMAIN, terminates TLS, applies
+#     security headers, and proxies /api + /ws + /webhooks to the
+#     backend container.
+#   • Two named volumes (caddy_data, caddy_config) so cert state
+#     survives container recreations.
+#
+# Prereqs:
+#   • DNS A/AAAA for DAISY_DOMAIN pointing at this host.
+#   • Ports 80 and 443 reachable from the internet (Let's Encrypt
+#     uses HTTP-01 challenges by default).
+#
+# What it does NOT do:
+#   • Frontend asset serving. The Caddy config inside the container
+#     proxies frontend requests to the `frontend` service (which the
+#     full docker-compose.yml runs on port 80 of its own container).
+#     If you'd rather serve the static bundle from Caddy directly,
+#     mount your `dist/` into /var/www/daisy on the caddy container
+#     and use the deploy/edge/Caddyfile.example template instead.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: daisy-caddy
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    environment:
+      DAISY_DOMAIN: ${DAISY_DOMAIN:?DAISY_DOMAIN required}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    # Inline Caddyfile via the command entrypoint. Keeps this overlay
+    # self-contained (one file = one feature). If you prefer file-on-
+    # disk: mount deploy/edge/Caddyfile.example as /etc/caddy/Caddyfile.
+    command: ["sh", "-c", "echo \"$$DAISY_DOMAIN {
+        header {
+            Strict-Transport-Security \\\"max-age=31536000; includeSubDomains\\\"
+            X-Frame-Options           \\\"DENY\\\"
+            X-Content-Type-Options    \\\"nosniff\\\"
+            Referrer-Policy           \\\"strict-origin-when-cross-origin\\\"
+            Permissions-Policy        \\\"geolocation=(), microphone=(), camera=()\\\"
+            Content-Security-Policy   \\\"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none'\\\"
+            -Server
+        }
+        request_body { max_size 1MB }
+        encode gzip zstd
+        handle_path /api/* {
+            reverse_proxy backend:3000 { flush_interval -1 }
+        }
+        @ws path /ws*
+        reverse_proxy @ws backend:3000 {
+            transport http { read_timeout 24h }
+        }
+        handle /webhooks/* { reverse_proxy backend:3000 }
+        handle { reverse_proxy frontend:80 }
+    }\" > /etc/caddy/Caddyfile && exec caddy run --config /etc/caddy/Caddyfile"]
+
+volumes:
+  caddy_data:
+  caddy_config:

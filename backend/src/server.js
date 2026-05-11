@@ -17,6 +17,7 @@ import { limiters } from "./middleware/rateLimit.js";
 import authRouter from "./api/auth.js";
 import usersRouter from "./api/users.js";
 import workspacesRouter from "./api/workspaces.js";
+import auditRouter from "./api/audit.js";
 import graphsRouter from "./api/graphs.js";
 import executionsRouter from "./api/executions.js";
 import pluginsRouter from "./api/plugins.js";
@@ -74,6 +75,7 @@ app.use(limiters.global);
 app.use("/auth", authRouter);
 app.use("/users", usersRouter);
 app.use("/workspaces", workspacesRouter);
+app.use("/audit", auditRouter);
 
 app.use("/graphs", graphsRouter);
 app.use("/executions", executionsRouter);

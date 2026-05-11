@@ -188,6 +188,13 @@ export const Users = {
   disable:        (id)            => api.delete(`/users/${id}`).then(r => r.data),
 };
 
+// Audit log — admin-only on the server. `list` returns
+// { rows, nextBefore }. Pass `nextBefore` from a previous call as
+// `params.before` to paginate.
+export const Audit = {
+  list: (params = {}) => api.get("/audit", { params }).then(r => r.data),
+};
+
 // Workspaces — the listing endpoint is open to any signed-in user
 // (returns just the workspaces they belong to). Mutating endpoints
 // are admin-only on the server.

@@ -25,6 +25,7 @@ import { pool } from "../db/pool.js";
 import { ValidationError, NotFoundError, ForbiddenError } from "../utils/errors.js";
 import { requireUser, requireRole } from "../middleware/auth.js";
 import { signAccessToken } from "../auth/tokens.js";
+import { auditLog } from "../audit/log.js";
 
 const router = Router();
 router.use(requireUser);
@@ -120,6 +121,10 @@ router.put("/:id", requireRole("admin"), async (req, res, next) => {
       "UPDATE workspaces SET name=$1, updated_at=NOW() WHERE id=$2",
       [name.trim(), req.params.id],
     );
+    await auditLog({
+      req, action: "workspace.rename",
+      resource: { type: "workspace", id: req.params.id, name: name.trim() },
+    });
     res.json({ id: req.params.id, renamed: true });
   } catch (e) { next(e); }
 });
@@ -152,6 +157,12 @@ router.post("/:id/switch", async (req, res, next) => {
       email:       req.user.email,
       role,
       workspaceId: req.params.id,
+    });
+    await auditLog({
+      req, action: "workspace.switch",
+      resource: { type: "workspace", id: req.params.id },
+      workspaceId: req.params.id,                       // log under the destination
+      metadata:    { fromWorkspaceId: req.user.workspaceId, role },
     });
     res.json({
       accessToken,

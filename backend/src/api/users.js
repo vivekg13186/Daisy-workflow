@@ -35,6 +35,7 @@ import { ValidationError, NotFoundError, ForbiddenError } from "../utils/errors.
 import { requireUser, requireRole } from "../middleware/auth.js";
 import { hash } from "../auth/passwords.js";
 import { revokeAllForUser } from "../auth/tokens.js";
+import { auditLog, diff } from "../audit/log.js";
 
 const router = Router();
 router.use(requireUser);
@@ -94,6 +95,11 @@ router.post("/", async (req, res, next) => {
       }
       throw e;
     }
+    await auditLog({
+      req, action: "user.create",
+      resource: { type: "user", id, name: email.toLowerCase() },
+      metadata: { role, displayName: displayName || null },
+    });
     res.status(201).json({ id, email: email.toLowerCase(), role });
   } catch (e) { next(e); }
 });
@@ -149,6 +155,16 @@ router.put("/:id", async (req, res, next) => {
     // chain here as belt-and-braces.
     if (status === "disabled") await revokeAllForUser(target.id);
 
+    await auditLog({
+      req, action: "user.update",
+      resource: { type: "user", id: target.id, name: target.email },
+      metadata: {
+        changes: diff(
+          { role: target.role, status: target.status, display_name: target.display_name },
+          { role: role ?? target.role, status: status ?? target.status, display_name: displayName ?? target.display_name },
+        ),
+      },
+    });
     res.json({ id: target.id, updated: true });
   } catch (e) { next(e); }
 });
@@ -173,6 +189,10 @@ router.post("/:id/password", async (req, res, next) => {
     // Resetting a password should boot every active session — the new
     // owner of the password should be the only one logged in.
     await revokeAllForUser(target.id);
+    await auditLog({
+      req, action: "user.password.reset",
+      resource: { type: "user", id: target.id, name: target.email },
+    });
     res.json({ id: target.id, passwordReset: true });
   } catch (e) { next(e); }
 });
@@ -199,6 +219,10 @@ router.delete("/:id", async (req, res, next) => {
       [target.id, req.user.workspaceId],
     );
     await revokeAllForUser(target.id);
+    await auditLog({
+      req, action: "user.disable",
+      resource: { type: "user", id: target.id, name: target.email },
+    });
     res.json({ id: target.id, disabled: true });
   } catch (e) { next(e); }
 });

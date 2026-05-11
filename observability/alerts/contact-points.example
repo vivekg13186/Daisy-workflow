@@ -1,0 +1,58 @@
+# Contact points — destinations Grafana posts firing alerts to.
+#
+# THIS IS A TEMPLATE. Copy to `contact-points.yml` (gitignored), fill
+# in your real webhook URLs / SMTP creds, restart Grafana. The
+# `contact-points.example.yml` you're reading right now is committed
+# and never picked up by Grafana's loader.
+#
+# Three transports shown; uncomment + fill in only the ones you use.
+#
+#   • Slack (incoming webhook URL)
+#   • Email (SMTP — also requires grafana.ini smtp config)
+#   • PagerDuty (events-v2 integration key)
+#
+# Multiple contact points can co-exist; notification-policies.yml
+# decides which one(s) each rule fires to.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: default-receiver
+    receivers:
+      - uid: slack-warning
+        type: slack
+        settings:
+          url: "https://hooks.slack.com/services/REPLACE/WITH/YOURS"
+          # Optional: override Grafana's default Slack template.
+          # title:   '{{ template "default.title"   . }}'
+          # text:    '{{ template "default.message" . }}'
+        # Send only on firing (default true). Set false to also send
+        # on resolve — usually overkill except for low-traffic ops.
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: oncall-pager
+    receivers:
+      - uid: pagerduty-critical
+        type: pagerduty
+        settings:
+          # The "Events API v2" integration key from PagerDuty.
+          # NOT the routing key from the older v1 API.
+          integrationKey: "REPLACE_WITH_PD_INTEGRATION_KEY"
+          severity: "critical"
+          class:    "infra"
+          group:    "daisy-dag"
+          component: "{{ .CommonLabels.alertname }}"
+
+  - orgId: 1
+    name: email-digest
+    receivers:
+      - uid: email-warning
+        type: email
+        settings:
+          addresses: "ops@example.com;leadership@example.com"
+          singleEmail: true   # one email per alert burst, not per alert
+        # SMTP creds live in grafana.ini under [smtp]. Mounting a
+        # custom grafana.ini in the compose file is the cleanest
+        # path — see wiki/12-alerting.md.

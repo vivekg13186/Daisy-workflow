@@ -35,7 +35,7 @@
 // the frontend's axios interceptor can detect and surface it as a
 // toast.
 
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { rateLimit } from "express-rate-limit";
 import RedisStore from "rate-limit-redis";
 import { redisConnection } from "../queue/queue.js";
 import { log } from "../utils/logger.js";
@@ -114,9 +114,14 @@ function make({ windowMs = 60_000, max, keyGenerator, message }) {
 // Pre-built limiters — import the one your route needs.
 //
 // Key generators:
-//   • IP-based:    ipKeyGenerator handles ipv6 correctly (collapses
-//                  blocks so an attacker can't churn through ::1
-//                  /64 addresses).
+//   • IP-based:    custom helper. For IPv4 we use the raw address.
+//                  For IPv6 we collapse to the /64 prefix so an
+//                  attacker can't churn through addresses inside a
+//                  single allocation to bypass per-IP limits (most
+//                  IPv6 ISPs hand out /64s as a unit). The upstream
+//                  package ships an `ipKeyGenerator` helper that
+//                  does the same thing, but its export shape moves
+//                  across patch versions so we keep it inline.
 //   • email-based: lower-cased + trimmed so "VIVEK" and " vivek "
 //                  share a bucket.
 //   • user-based:  req.user.id when present; falls back to IP for
@@ -124,7 +129,18 @@ function make({ windowMs = 60_000, max, keyGenerator, message }) {
 //                  protected routes but better to limit than not).
 // ────────────────────────────────────────────────────────────────────
 
-const ipKey      = (req) => ipKeyGenerator(req.ip);
+function ipKeyOf(req) {
+  const ip = req.ip || req.socket?.remoteAddress || "unknown";
+  // IPv6 → collapse to /64 (first four hextets).
+  if (ip.includes(":")) {
+    const hextets = ip.split(":").slice(0, 4);
+    while (hextets.length < 4) hextets.push("0");
+    return hextets.join(":") + "::/64";
+  }
+  return ip;
+}
+
+const ipKey      = (req) => ipKeyOf(req);
 const userKey    = (req) => req.user?.id ? `u:${req.user.id}` : ipKey(req);
 const emailKey   = (req) => {
   const e = String(req.body?.email || "").trim().toLowerCase();

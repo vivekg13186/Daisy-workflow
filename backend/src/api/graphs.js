@@ -36,6 +36,7 @@ import { enqueueExecution } from "../queue/queue.js";
 import { NotFoundError, ValidationError } from "../utils/errors.js";
 import { requireUser, requireRole } from "../middleware/auth.js";
 import { limiters } from "../middleware/rateLimit.js";
+import { auditLog } from "../audit/log.js";
 
 // `dsl` is the canonical body field. Older clients still posting `yaml`
 // keep working — we accept either here and treat the contents as JSON.
@@ -114,6 +115,10 @@ router.post("/", requireRole("admin", "editor"), async (req, res, next) => {
       }
       throw e;
     }
+    await auditLog({
+      req, action: "graph.create",
+      resource: { type: "graph", id, name: parsed.name },
+    });
     res.status(201).json({ id, name: parsed.name });
   } catch (e) { next(e); }
 });
@@ -144,6 +149,10 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res, next) => {
         WHERE id = $1 AND workspace_id = $4`,
       [req.params.id, dsl, JSON.stringify(parsed), req.user.workspaceId, req.user.id],
     );
+    await auditLog({
+      req, action: "graph.update",
+      resource: { type: "graph", id: req.params.id, name: parsed.name },
+    });
     res.json({ id: req.params.id, name: parsed.name });
   } catch (e) { next(e); }
 });
@@ -156,6 +165,10 @@ router.delete("/:id", requireRole("admin", "editor"), async (req, res, next) => 
       [req.params.id, req.user.workspaceId],
     );
     if (rowCount === 0) throw new NotFoundError("graph");
+    await auditLog({
+      req, action: "graph.delete",
+      resource: { type: "graph", id: req.params.id },
+    });
     res.status(200).json({ ok: true, id: req.params.id, deleted: "graph" });
   } catch (e) { next(e); }
 });
@@ -281,6 +294,11 @@ router.post("/:id/execute", limiters.execute, requireRole("admin", "editor"), as
       [execId, req.params.id, JSON.stringify(userInput), req.user.workspaceId],
     );
     await enqueueExecution({ executionId: execId, graphId: req.params.id });
+    await auditLog({
+      req, action: "graph.execute",
+      resource: { type: "graph", id: req.params.id },
+      metadata: { executionId: execId },
+    });
     res.status(202).json({ executionId: execId, status: "queued" });
   } catch (e) { next(e); }
 });

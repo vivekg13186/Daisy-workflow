@@ -96,6 +96,31 @@ export async function pruneRefreshTokens({
 }
 
 /**
+ * Delete `audit_logs` older than `days`. Audit retention windows
+ * tend to be longer than execution retention because compliance
+ * regimes ask for "at least 12 months of access logs." Default
+ * 365 days; bump for HIPAA / SOC2 / regulated industries.
+ *
+ * The bounded LIMIT keeps the DELETE chunked the same way other
+ * retention policies do.
+ */
+export async function pruneAuditLogs({
+  days  = 365,
+  limit = 50_000,
+} = {}) {
+  return await deleteWithLimit(
+    `DELETE FROM audit_logs
+       WHERE id IN (
+         SELECT id FROM audit_logs
+          WHERE created_at < NOW() - $1::interval
+          ORDER BY created_at
+          LIMIT $2
+       )`,
+    [`${days} days`, limit],
+  );
+}
+
+/**
  * Trim conversation history to the most-recent N turns per
  * conversation. KV memory (`namespace = 'kv'`) is intentional user
  * data and is never touched.

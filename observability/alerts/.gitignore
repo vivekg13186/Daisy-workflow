@@ -1,0 +1,5 @@
+# The operator copies contact-points.example → contact-points.yml
+# and fills in real webhook URLs / SMTP creds / PagerDuty keys.
+# Grafana provisions every *.yml in this directory; the example file
+# has a non-.yml extension so it stays inert until copied.
+contact-points.yml
