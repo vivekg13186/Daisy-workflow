@@ -1,71 +1,43 @@
-# Daisy  — Wiki
+Daisy is a workflow automation platform built around a visual editor and a typed DSL. The runtime executes directed acyclic graphs (DAGs) of plugin actions, supports parallel execution with retries and batch fan-out, evaluates FEEL expressions in user-supplied placeholders, and protects credentials with KMS envelope encryption. The platform exposes both in-process and HTTP-transport plugins, supports OIDC authentication, and emits audit, observability, and rate-limit signals suitable for production deployments.
 
-A low code workflow automation application. Visual editor, pluggable actions,
-parallel execution, retries, batch fan-out, FEEL expressions, KMS
-envelope encryption, OIDC, audit logging, AI-assisted authoring, and
-out-of-process plugins.
+This wiki documents the platform as it ships today. The sidebar organizes pages by audience: introductory material, developer references, the plugin and trigger catalog, and operations.
 
- 
+## Introduction
 
----
+| Page | Description |
+|------|-------------|
+| [Getting Started](Getting-Started) | Local development environment, prerequisites, first workflow run. |
+| [Overview](Overview) | Architecture, execution model, data model, scaling characteristics. |
 
-## Start here
+## Developer reference
 
-| Page                                              | What it covers |
-|---------------------------------------------------|----------------|
-| [Getting started (developers)](./00-getting-started.md) | Local dev quickstart, code layout, common commands, your first plugin. |
-| [Overview](./01-overview.md)                      | Component diagram, execution algorithm, data model, scaling. |
+| Page | Description |
+|------|-------------|
+| [DSL Reference](DSL-Reference) | Workflow JSON schema, FEEL expressions, runtime context, execution semantics. |
+| [Plugin Reference](Plugins) | Catalog of built-in action plugins with inputs, outputs, and examples. |
+| [Plugin Architecture](Plugin-architecture) | In-process and HTTP-transport plugin contracts, manifests, marketplace catalog. |
+| [Execution Limits](Execution-Limits) | Per-node and per-workflow timeouts, retry clamp, batch and token budgets. |
+| [Self Healing](Self-Healing) | On-demand failure diagnosis for executions. |
 
----
+## Operations
 
-## For developers
+| Page | Description |
+|------|-------------|
+| [Setup](Setup) | Docker compose layout, environment variables, deployment profiles. |
+| [Auth](Auth) | Local accounts, OIDC, role-based access control, workspaces, token rotation. |
+| [Configs Encryption](Configs-Encryption) | KMS envelope encryption, providers, key rotation, audit trail. |
+| [TLS Edge](TLS-Edge) | Reverse proxy configuration for production HTTPS. |
+| [Rate Limiting](Rate-Limiting) | Per-IP, per-user, and per-email request budgets backed by Redis. |
+| [Health Probes](Health-Probes) | Liveness and readiness endpoints for API and worker. |
+| [Retention](Retention) | Scheduled prune of executions, refresh tokens, and history. |
+| [Backups](Backups) | Postgres dump and restore procedures. |
+| [Alerting](Alerting) | Default Grafana alert rules and notifier routing. |
+| [Audit Logging](Audit-Logging) | Append-only log of security-relevant actions. |
 
-You're authoring workflows, writing plugins, or working on the engine
-itself.
+## Reference
 
-| Page                                              | What it covers |
-|---------------------------------------------------|----------------|
-| [DSL reference](./03-dsl-reference.md)            | Full JSON syntax, FEEL expressions, runtime context, execution semantics. |
-| [Plugin reference](./04-plugins.md)               | Every built-in action plugin with inputs, outputs, examples. |
-| [Plugin architecture](./16-plugin-architecture.md)| In-process vs HTTP-transport, the SDK, manifests, marketplace catalog, the plugin generator agent. |
-| [Execution limits](./07-execution-limits.md)      | Per-node + per-workflow timeouts, retry cap, token budget. |
-| [Self-healing](./15-self-healing.md)              | Diagnose-on-demand for failed nodes. |
+| Page | Description |
+|------|-------------|
+| [Screenshots](Screenshots) | User-interface walkthrough. |
 
-Reference for individual plugins lives under [`plugins/`](./plugins/);
-trigger drivers under [`triggers/`](./triggers/).
-
----
-
-## For devops
-
-You're deploying, securing, scaling, or operating it.
-
-| Page                                              | What it covers |
-|---------------------------------------------------|----------------|
-| [Setup](./02-setup.md)                            | Docker layouts, env vars, compose profiles. |
-| [Auth & authorization](./06-auth.md)              | Local accounts, OIDC, roles, multi-workspace, token rotation. |
-| [Configs encryption](./05-configs-encryption.md)  | KMS envelope encryption, providers, rotation, audit. |
-| [TLS edge](./14-tls-edge.md)                      | nginx / Caddy / k8s ingress for production HTTPS. |
-| [Rate limiting](./11-rate-limiting.md)            | Per-IP, per-user, per-email budgets backed by Redis. |
-| [Health probes](./10-health-probes.md)            | `/healthz` + `/readyz` on API + worker, k8s + compose examples. |
-| [Retention](./08-retention.md)                    | Daily Postgres prune for executions, refresh tokens, history. |
-| [Backups](./09-backups.md)                        | `pg_dump`, restore scripts, compose overlay, deployment-shape runbook. |
-| [Alerting](./12-alerting.md)                      | 5 default Grafana rules + Slack/PagerDuty/email routing. |
-| [Audit logging](./13-audit-logging.md)            | Who-did-what-when on security-relevant actions. |
-
----
-
-## Quick links
-
-
-- Backend code: [`backend/src/`](../backend/src/)
-- Frontend code: [`frontend/src/`](../frontend/src/)
-- Plugin SDK: [`plugin-sdk/`](../plugin-sdk/)
-- Example external plugin: [`plugins-external/reddit/`](../plugins-external/devvit.reddit/)
-- Migrations: [`backend/migrations/`](../backend/migrations/)
-- Observability stack: [`observability/`](../observability/)
-
----
-
-> Daisy-DAG is developed with AI assistance. Bug reports and feedback
-> are welcome via the repo's issue tracker.
+Plugin reference pages are listed individually in the sidebar under **Built-in plugins**; trigger drivers are listed under **Triggers**.

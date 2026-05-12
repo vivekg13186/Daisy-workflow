@@ -23,25 +23,19 @@
 
     <!-- ── Center: VueFlow canvas ───────────────────────────────────── -->
     <div class="flow-container col">
-      <VueFlow
-        v-model:nodes="nodes"
-        v-model:edges="edges"
-        class="fit"
-        :default-viewport="{ x: 0, y: 0, zoom: 1 }"
-        @node-click="onNodeClick"
-        @pane-click="onPaneClick"
-      >
+      <VueFlow v-model:nodes="nodes" v-model:edges="edges" class="fit" :default-viewport="{ x: 0, y: 0, zoom: 1 }"
+        @node-click="onNodeClick" @pane-click="onPaneClick">
         <Background />
         <Controls>
           <ControlButton @click="leftOpen = !leftOpen">
-            <q-icon name="build">
+            <q-icon name="build" style="color:black">
               <q-tooltip anchor="center right" self="center left" :offset="[10, 10]">
                 Toggle plugin palette
               </q-tooltip>
             </q-icon>
           </ControlButton>
           <ControlButton @click="rightOpen = !rightOpen">
-            <q-icon name="settings">
+            <q-icon name="settings" style="color:black">
               <q-tooltip anchor="center right" self="center left" :offset="[10, 10]">
                 Toggle property panel
               </q-tooltip>
@@ -58,27 +52,25 @@
 
     <!-- ── Right: properties + per-node toolbar ─────────────────────── -->
     <div v-if="rightOpen" class="right-pane column no-wrap" style="width: 450px;">
-      <q-toolbar dense class="panel-toolbar">
+      <q-toolbar dense class="panel-toolbar" style="padding-right:5px!important">
         <span class="text-caption" style="color: var(--text-muted);">
           {{ selectedNode ? "Node" : "Flow" }} properties
         </span>
         <q-space />
-        <q-btn v-if="selectedNode" dense flat round icon="delete" color="negative" size="sm"
-               @click="onDeleteSelected">
-          <q-tooltip>Delete selected node</q-tooltip>
-        </q-btn>
-        <q-btn dense flat round icon="close" size="sm" @click="rightOpen = false">
-          <q-tooltip>Hide panel</q-tooltip>
-        </q-btn>
+        <div>
+          <q-btn v-if="selectedNode" dense flat round icon="delete" color="negative" size="sm"
+            @click="onDeleteSelected">
+            <q-tooltip>Delete selected node</q-tooltip>
+          </q-btn>
+          <q-btn dense flat round icon="close" size="sm" @click="rightOpen = false">
+            <q-tooltip>Hide panel</q-tooltip>
+          </q-btn>
+        </div>
+
       </q-toolbar>
 
       <q-scroll-area class="col">
-        <component
-          v-if="selectedNode"
-          :is="PluginPropertyPanel"
-          :node="selectedNode"
-          @update="onUpdateNodeData"
-        />
+        <component v-if="selectedNode" :is="PluginPropertyPanel" :node="selectedNode" @update="onUpdateNodeData" />
         <div v-else class="q-pa-md text-caption text-grey">
           Click a node on the canvas to edit its properties, or pick a plugin from
           the left palette to add one.
@@ -100,19 +92,19 @@ import { Background } from "@vue-flow/background";
 import { Controls, ControlButton } from "@vue-flow/controls";
 import { MiniMap } from "@vue-flow/minimap";
 
-import NodePalette          from "./NodePalette.vue";
-import PluginNode           from "./nodes/PluginNode.vue";
-import PluginPropertyPanel  from "./nodes/PluginPropertyPanel.vue";
+import NodePalette from "./NodePalette.vue";
+import PluginNode from "./nodes/PluginNode.vue";
+import PluginPropertyPanel from "./nodes/PluginPropertyPanel.vue";
 import { buildNodeRegistry } from "./NodeRegistry.js";
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
-  plugins:    { type: Array,  default: () => [] },
+  plugins: { type: Array, default: () => [] },
 });
 const emit = defineEmits(["update:modelValue"]);
 
 // ── Drawer toggles ──────────────────────────────────────────────────────────
-const leftOpen  = ref(true);
+const leftOpen = ref(true);
 const rightOpen = ref(false);
 
 // ── VueFlow store ───────────────────────────────────────────────────────────
@@ -249,7 +241,7 @@ function applyModel(model) {
   const newNodes = (model.nodes || []).map((n, i) => {
     const plugin = (props.plugins || []).find(p => p.name === n.action) || { name: n.action, inputSchema: {}, outputSchema: {} };
     const pos = model.meta?.positions?.[n.name] || { x: 100 + (i % 4) * 220, y: 60 + Math.floor(i / 4) * 120 };
-    const id  = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `n-${Date.now()}-${i}`;
+    const id = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `n-${Date.now()}-${i}`;
     nameToId.set(n.name, id);
     return {
       id,
@@ -258,17 +250,17 @@ function applyModel(model) {
       targetPosition: Position.Left,
       position: { x: pos.x, y: pos.y },
       data: {
-        action:      n.action,
-        name:        n.name,
+        action: n.action,
+        name: n.name,
         description: n.description || "",
-        inputs:      { ...(n.inputs  || {}) },
-        outputs:     { ...(n.outputs || {}) },
-        executeIf:   n.executeIf  || "",
-        retry:       n.retry      || 0,
-        retryDelay:  n.retryDelay || 0,
-        onError:     n.onError    || "terminate",
-        batchOver:   n.batchOver  || "",
-        outputVar:   n.outputVar  || "",
+        inputs: { ...(n.inputs || {}) },
+        outputs: { ...(n.outputs || {}) },
+        executeIf: n.executeIf || "",
+        retry: n.retry || 0,
+        retryDelay: n.retryDelay || 0,
+        onError: n.onError || "terminate",
+        batchOver: n.batchOver || "",
+        outputVar: n.outputVar || "",
         plugin,
       },
     };
@@ -276,7 +268,7 @@ function applyModel(model) {
   const newEdges = (model.edges || []).map((e, i) => ({
     id: `e-${i}-${e.from}-${e.to}`,
     source: nameToId.get(e.from) || e.from,
-    target: nameToId.get(e.to)   || e.to,
+    target: nameToId.get(e.to) || e.to,
   }));
 
   nodes.value = newNodes;
@@ -319,17 +311,17 @@ function extractAndEmit() {
       y: Math.round(n.position?.y ?? 0),
     };
     return {
-      name:        dagName,
-      action:      n.data?.action || "",
+      name: dagName,
+      action: n.data?.action || "",
       description: n.data?.description || "",
-      inputs:      n.data?.inputs  || {},
-      outputs:     n.data?.outputs || {},
-      executeIf:   n.data?.executeIf  || "",
-      retry:       n.data?.retry      || 0,
-      retryDelay:  n.data?.retryDelay || 0,
-      onError:     n.data?.onError    || "terminate",
-      batchOver:   n.data?.batchOver  || "",
-      outputVar:   n.data?.outputVar  || "",
+      inputs: n.data?.inputs || {},
+      outputs: n.data?.outputs || {},
+      executeIf: n.data?.executeIf || "",
+      retry: n.data?.retry || 0,
+      retryDelay: n.data?.retryDelay || 0,
+      onError: n.data?.onError || "terminate",
+      batchOver: n.data?.batchOver || "",
+      outputVar: n.data?.outputVar || "",
     };
   });
   const newEdges = edges.value
@@ -366,12 +358,32 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.canvas-tab     { width: 100%; height: 100%; background: var(--bg); }
-.flow-container { flex: 1 1 auto; min-width: 0; height: 100%; position: relative; }
-.left-pane      { background: var(--surface); border-right: 1px solid var(--border); }
-.right-pane     { background: var(--surface); border-left:  1px solid var(--border); }
-.panel-toolbar  {
+.canvas-tab {
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+}
+
+.flow-container {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+}
+
+.left-pane {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.right-pane {
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+}
+
+.panel-toolbar {
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
+
 }
 </style>
