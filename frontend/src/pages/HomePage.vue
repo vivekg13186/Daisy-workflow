@@ -77,6 +77,9 @@
           @edit="onEditWorkflow"
           @delete="onDeleteWorkflow"
           @delete-selected="onDeleteSelectedWorkflows"
+          @refresh="reload"
+          @export="onExportWorkflows"
+          @import="onImportWorkflows"
         />
 
         <!-- Triggers ───────────────────────────────────────────────────
@@ -99,6 +102,8 @@
           @run="fireTrigger"
           @start="startTrigger"
           @stop="stopTrigger"
+          @export="onExportTriggers"
+          @import="onImportTriggers"
         />
 
         <!-- Agents ─────────────────────────────────────────────────── -->
@@ -153,6 +158,9 @@ import { auth } from "../stores/auth.js";
 import AppTable from "../components/AppTable.vue";
 import TriggersTable from "../components/TriggersTable.vue";
 import PluginsPage from "./PluginsPage.vue"
+// File picker + download helpers — same utilities the FlowDesigner
+// uses for its single-flow Import/Export buttons.
+import { downloadText, pickFileAsText } from "../components/flow/flowModel.js";
 const router = useRouter();
 const route  = useRoute();
 const $q     = useQuasar();
@@ -464,6 +472,141 @@ async function startTrigger(row) {
     triggerBusy[row.id] = false;
   }
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Bulk Import / Export — Workflows + Triggers.
+//
+// Export: pulls the full row(s) from the API (the table rows are a
+//   slim listing; we need each graph's `dsl` for a useful export, and
+//   each trigger's full config). Bundles into a single JSON file and
+//   downloads. The exported file is human-readable + diff-able.
+//
+// Import: opens a file picker, parses JSON (accepts either a single
+//   object or an array), creates each via the existing
+//   Graphs.create / Triggers.create endpoints. Errors are
+//   accumulated; the user gets a single notify with counts at the
+//   end so a bad row doesn't blow up the whole batch.
+//
+// Triggers export resolves the parent flow by NAME (not id) so the
+// JSON is portable between environments — `graph_id` is a UUID that
+// differs per deployment. Import does the reverse lookup.
+// ──────────────────────────────────────────────────────────────────────
+
+async function onExportWorkflows() {
+  try {
+    // The table's `wf_rows` is the listing shape (no full dsl), so
+    // re-fetch each graph for its canonical JSON. Done in parallel
+    // since it's a read-only N-request fan-out.
+    const full = await Promise.all(wf_rows.value.map(r => Graphs.get(r.id).catch(() => null)));
+    const out = full.filter(Boolean).map(g => {
+      // Prefer the parsed shape if the server returns it; fall back
+      // to re-parsing dsl. Strip server-side bookkeeping fields.
+      const dsl = g.parsed || (typeof g.dsl === "string" ? safeParse(g.dsl) : g.dsl);
+      return dsl;
+    });
+    const payload = JSON.stringify({ kind: "daisy.workflows", version: 1, workflows: out }, null, 2);
+    downloadText(`workflows-${Date.now()}.json`, payload, "application/json");
+    notify(`Exported ${out.length} workflow(s)`, "positive");
+  } catch (e) {
+    notify(`Export failed: ${errMsg(e)}`, "negative");
+  }
+}
+
+async function onImportWorkflows() {
+  const text = await pickFileAsText(".json,.txt");
+  if (!text) return;
+  let bundle;
+  try { bundle = JSON.parse(text); }
+  catch (e) { notify(`Import: not valid JSON (${e.message})`, "negative"); return; }
+  // Accept three shapes: { kind, workflows: [...] }, a bare array, or
+  // a single workflow object. Same flexibility as the FlowDesigner's
+  // single-flow import.
+  const items = Array.isArray(bundle?.workflows) ? bundle.workflows
+              : Array.isArray(bundle)            ? bundle
+              : [bundle];
+  let ok = 0, failed = 0;
+  for (const item of items) {
+    try { await Graphs.create(item); ok++; }
+    catch { failed++; }
+  }
+  await reload();
+  notify(failed
+    ? `Imported ${ok}/${items.length} (${failed} failed)`
+    : `Imported ${ok} workflow(s)`,
+    failed ? "warning" : "positive");
+}
+
+async function onExportTriggers(selected = []) {
+  try {
+    // The TriggersTable emits the current selection. Empty selection
+    // means "export everything" — easier than two buttons or a mode
+    // toggle, and matches the principle of "no selection = whole
+    // list." The Export button's tooltip flips to reflect this so
+    // the choice is visible.
+    const source = Array.isArray(selected) && selected.length
+      ? selected
+      : trigger_rows.value;
+    // Re-fetch each trigger via Triggers.get to be sure we have the
+    // canonical config. The listing shape is usually identical, but
+    // belt-and-braces.
+    const full = await Promise.all(source.map(r => Triggers.get(r.id).catch(() => null)));
+    const out = full.filter(Boolean).map(t => ({
+      name:       t.name,
+      type:       t.type,
+      graph_name: graphName(t.graph_id) || null,   // portable: name, not uuid
+      config:     t.config,
+      enabled:    !!t.enabled,
+    }));
+    const payload = JSON.stringify({ kind: "daisy.triggers", version: 1, triggers: out }, null, 2);
+    const tag = selected.length ? `selected-${out.length}` : `all-${out.length}`;
+    downloadText(`triggers-${tag}-${Date.now()}.json`, payload, "application/json");
+    notify(`Exported ${out.length} trigger(s)`, "positive");
+  } catch (e) {
+    notify(`Export failed: ${errMsg(e)}`, "negative");
+  }
+}
+
+async function onImportTriggers() {
+  const text = await pickFileAsText(".json,.txt");
+  if (!text) return;
+  let bundle;
+  try { bundle = JSON.parse(text); }
+  catch (e) { notify(`Import: not valid JSON (${e.message})`, "negative"); return; }
+  const items = Array.isArray(bundle?.triggers) ? bundle.triggers
+              : Array.isArray(bundle)           ? bundle
+              : [bundle];
+  // Build a name→id index for graph lookup. The listing is already
+  // loaded into wf_rows on every reload, but if it's empty (user
+  // hasn't visited Workflows yet) fall back to a fresh fetch.
+  const graphs = wf_rows.value.length ? wf_rows.value : await Graphs.list().catch(() => []);
+  const idByName = new Map(graphs.map(g => [g.name, g.id]));
+
+  let ok = 0, failed = 0, missing = 0;
+  for (const item of items) {
+    try {
+      const graphId = item.graph_id || (item.graph_name && idByName.get(item.graph_name));
+      if (!graphId) { missing++; continue; }
+      await Triggers.create({
+        name:    item.name,
+        graphId,
+        type:    item.type,
+        config:  item.config || {},
+        enabled: !!item.enabled,
+      });
+      ok++;
+    } catch { failed++; }
+  }
+  await reload();
+  const parts = [`Imported ${ok}/${items.length}`];
+  if (failed)  parts.push(`${failed} failed`);
+  if (missing) parts.push(`${missing} skipped (flow not found)`);
+  notify(parts.join(" · "), (failed || missing) ? "warning" : "positive");
+}
+
+// Tolerant JSON.parse for cases where the workflow's DSL is stored
+// as a string (legacy rows). Returns null on parse failure rather
+// than throwing — the caller decides what to do.
+function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
 function onAddAgent()        { router.push({ path: "/agentDesigner/new" }); }
 function onEditAgent(row)    { router.push({ path: `/agentDesigner/${row.id}` }); }

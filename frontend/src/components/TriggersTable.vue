@@ -25,11 +25,13 @@
 
 <template>
   <q-table
+    v-model:selected="selected"
     :rows="filteredRows"
     :columns="columns"
     :title="title"
     row-key="id"
     flat dense bordered
+    selection="multiple"
     :rows-per-page-options="[10, 25, 50, 100]"
   >
     <template v-slot:top-right>
@@ -45,6 +47,32 @@
         @click="onRefresh"
       >
         <q-tooltip>Refresh</q-tooltip>
+      </q-btn>
+
+      <q-btn
+        icon="download" flat dense size="sm"
+        @click="onExport"
+      >
+        <!-- Tooltip flips based on selection so the action is unambiguous:
+             user can see at a glance whether they're about to dump the
+             whole table or just the boxes they've ticked. -->
+        <q-tooltip>
+          {{ selected.length
+              ? `Export ${selected.length} selected to JSON`
+              : "Export all triggers to JSON" }}
+        </q-tooltip>
+        <q-badge
+          v-if="selected.length"
+          color="primary" floating
+          :label="selected.length"
+        />
+      </q-btn>
+      <q-btn
+        v-if="canEdit"
+        icon="upload" flat dense size="sm"
+        @click="onImport"
+      >
+        <q-tooltip>Import triggers from JSON</q-tooltip>
       </q-btn>
 
       <q-btn v-if="canEdit" icon="add" flat dense size="sm" @click="onAdd">
@@ -136,7 +164,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 const props = defineProps({
   rows:    { type: Array,  default: () => [] },
@@ -161,10 +189,29 @@ const emit = defineEmits([
   "run",
   "start",
   "stop",
+  // Bulk Import / Export of triggers. Export carries the current
+  // selection (possibly empty); the parent treats an empty array
+  // as "export everything." Import is a fire-and-forget signal —
+  // parent opens its own picker.
+  "import",
+  "export",
+  // Mirrors q-table's selection state up so the parent can show
+  // selection-aware UI (e.g. a "selected N" banner) if it wants.
+  "selection-change",
 ]);
 
 const filter      = ref("");
 const refreshing  = ref(false);
+// Multi-select state — drives the checkbox column rendered by
+// q-table's `selection="multiple"`. The Export button picks this
+// up to scope a download to just the selected rows (empty selection
+// falls through to "all rows"). Other parents wanting the selection
+// can listen to @selection-change.
+const selected    = ref([]);
+
+// Re-emit selection upward so the parent (HomePage) can show
+// selection-aware UI in its own toolbar if it ever wants to.
+watch(selected, (v) => emit("selection-change", v));
 
 // The literal "editor" role can edit. We also let admins through —
 // admin is the superset of editor in the app's role model.
@@ -184,6 +231,12 @@ function onStop(row)   { emit("stop",   row); }
 function onEdit(row)   { if (canEdit.value) emit("edit",   row); }
 function onDelete(row) { if (canEdit.value) emit("delete", row); }
 function onAdd()       { if (canEdit.value) emit("add"); }
+// Hand the parent the current selection so it can scope the export
+// to "what the user ticked" or fall back to all rows when nothing's
+// ticked. We send a fresh array, not the ref, so the parent can
+// mutate it safely.
+function onExport()    { emit("export", [...selected.value]); }
+function onImport()    { if (canEdit.value) emit("import"); }
 
 function onRefresh() {
   if (refreshing.value) return;

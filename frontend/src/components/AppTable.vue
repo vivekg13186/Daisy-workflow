@@ -22,6 +22,25 @@
         <q-tooltip>Refresh</q-tooltip>
       </q-btn>
 
+      <!-- Import / Export — same listener-gated pattern as Refresh so
+           tables that don't care don't get the buttons. Export is safe
+           in read-only mode (it doesn't mutate); Import is mutating so
+           we hide it under readOnly. -->
+      <q-btn
+        v-if="hasExportListener"
+        icon="download" flat dense size="sm"
+        @click="onExport"
+      >
+        <q-tooltip>Export to JSON file</q-tooltip>
+      </q-btn>
+      <q-btn
+        v-if="hasImportListener && !readOnly"
+        icon="upload" flat dense size="sm"
+        @click="onImport"
+      >
+        <q-tooltip>Import from JSON file</q-tooltip>
+      </q-btn>
+
       <!-- Mutating buttons disappear entirely in read-only mode (editor
            view, Instances, Running triggers). Quasar's q-table still
            shows the title + search even without these. -->
@@ -142,12 +161,21 @@ import { useQuasar } from "quasar";
 const $q = useQuasar();
 const instance = getCurrentInstance();
 
-// Whether the parent attached an @refresh handler. The button is
-// hidden when nobody's listening — keeps older callers untouched and
-// avoids a button that does nothing visible.
+// Whether the parent attached an @refresh / @import / @export handler.
+// The corresponding buttons are hidden when nobody's listening —
+// keeps older callers untouched and avoids buttons that do nothing
+// visible.
 const hasRefreshListener = computed(() => {
   const vnode = instance?.vnode;
   return !!(vnode?.props?.onRefresh);
+});
+const hasImportListener = computed(() => {
+  const vnode = instance?.vnode;
+  return !!(vnode?.props?.onImport);
+});
+const hasExportListener = computed(() => {
+  const vnode = instance?.vnode;
+  return !!(vnode?.props?.onExport);
 });
 
 const props = defineProps({
@@ -191,6 +219,11 @@ const emit = defineEmits([
   // re-fetch its rows; the button shows a spinner until the parent
   // either resets the busy prop or the next render flushes.
   "refresh",
+  // Import / export. Export receives no payload — parent owns
+  // serialisation + file download. Import is fire-and-forget —
+  // parent opens its own file picker.
+  "import",
+  "export",
 ]);
 
 const selected = ref([]);
@@ -206,6 +239,9 @@ function onRefresh() {
   emit("refresh");
   setTimeout(() => { refreshing.value = false; }, 400);
 }
+
+function onImport() { emit("import"); }
+function onExport() { emit("export"); }
 
 const filteredRows = computed(() => {
   if (!filter.value) return props.rows;
