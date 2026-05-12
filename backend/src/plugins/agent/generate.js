@@ -53,9 +53,9 @@ fences. The shape is:
 
 CRITICAL RULES:
 
-1. The plugin uses HTTP transport via @daisy-dag/plugin-sdk. index.js MUST be:
+1. The plugin uses HTTP transport via daisy-plugin-sdk. index.js MUST be:
 
-   import { servePlugin } from "@daisy-dag/plugin-sdk";
+   import { servePlugin } from "daisy-plugin-sdk";
    import fs from "node:fs";
 
    const manifest = JSON.parse(
@@ -77,22 +77,24 @@ CRITICAL RULES:
    The inputSchema MUST be a valid JSON Schema object with type=object and
    "required" listing every mandatory input.
 
-3. package.json MUST be type=module, depend on "@daisy-dag/plugin-sdk":
-   "file:../../plugin-sdk", and declare a "start" script of "node index.js".
-   Include any third-party deps the plugin actually uses.
+3. package.json MUST be type=module, depend on "daisy-plugin-sdk" (the
+   published npm package — pin to a caret range like "^0.1.0"), and
+   declare a "start" script of "node index.js". Include any third-party
+   deps the plugin actually uses.
 
-4. Dockerfile MUST use node:22-alpine, copy BOTH plugin-sdk and the plugin
-   folder into /workspace, set WORKDIR to /workspace/<plugin-folder>, run
-   "npm install --omit=dev", drop privileges with "USER node", and end with
-   CMD ["node", "index.js"]. The image is built from the REPO ROOT context so
-   plugin-sdk/ is reachable.
+4. Dockerfile MUST use node:22-alpine, COPY the plugin folder into
+   /workspace, set WORKDIR to /workspace, run "npm install --omit=dev"
+   (which pulls daisy-plugin-sdk from npm), drop privileges with
+   "USER node", and end with CMD ["node", "index.js"]. The image is
+   self-contained — no repo-root context is needed because the SDK is
+   on npm.
 
 5. README.md briefly explains what the plugin does, the input/output shape,
    and any required workspace configs (configRefs).
 
 6. deployInstructions is a markdown string with three numbered steps:
-   (a) save the files under plugins-external/<name>/ at the repo root,
-   (b) "docker compose -f docker-compose.yml -f docker-compose.plugins.yml --profile full up -d --build",
+   (a) "save the files into any folder",
+   (b) "docker build -t <name>-plugin . && docker run -d --name <name>-plugin -p 8080:8080 <name>-plugin",
    (c) install with "POST /plugins/install { endpoint: 'http://<name>-plugin:8080' }"
    or via the Plugins page "Install from URL" button.
 
