@@ -141,7 +141,15 @@
                                         {{ a.reason }}
                                     </q-item-label>
                                 </q-item-section>
-                                <q-item-section side>
+                                <q-item-section side class="row no-wrap q-gutter-xs">
+                                    <q-btn
+                                        flat dense round size="sm"
+                                        icon="download"
+                                        :loading="exportingId === a.id"
+                                        @click="onExportArchive(a)"
+                                    >
+                                        <q-tooltip>Export this snapshot as JSON</q-tooltip>
+                                    </q-btn>
                                     <q-btn
                                         flat dense round size="sm"
                                         icon="restore"
@@ -211,6 +219,10 @@ const historyOpen    = ref(false);
 const historyLoading = ref(false);
 const archives       = ref([]);
 const restoringId    = ref(null);
+// Per-row spinner for the History drawer's Export button. Same
+// pattern as restoringId so two simultaneous clicks on different
+// archives can both show their own loading state.
+const exportingId    = ref(null);
 
 // The text we last successfully saved — used as a cheap dirty-check via
 // equality with the current serialised model.
@@ -435,6 +447,42 @@ async function onRestore(archive) {
         $q.notify({ type: "negative", message: `Restore failed: ${errMsg(e)}`, position: "bottom" });
     } finally {
         restoringId.value = null;
+    }
+}
+
+// Export a specific archive (snapshot) as a JSON file. Solves the
+// "pin to a historical version" use case without any backend / schema
+// changes: the operator keeps the JSON locally (or in git) and can
+// re-import it later via the Import button on the Workflows table.
+//
+// The listing rows (Graphs.archives) don't include the full DSL —
+// the response shape there is summary-only — so we fetch the
+// individual archive via Graphs.archiveGet first.
+async function onExportArchive(archive) {
+    if (!archive?.id || exportingId.value) return;
+    exportingId.value = archive.id;
+    try {
+        const full = await Graphs.archiveGet(route.params.id, archive.id);
+        // Prefer the canonical parsed shape; fall back to the raw dsl
+        // string. Same precedence the bulk Workflows export uses.
+        const dsl = full?.parsed
+            ?? (typeof full?.dsl === "string" ? JSON.parse(full.dsl) : full?.dsl)
+            ?? null;
+        if (!dsl) throw new Error("snapshot has no DSL content");
+        // Filename pattern: <flow-name>__<archived-at-iso>.json so
+        // multiple archives of the same flow sort chronologically.
+        const safeName = (model.value.name || "flow").replace(/[^A-Za-z0-9_.-]/g, "_");
+        const tsTag = new Date(archive.archived_at).toISOString().replace(/[:.]/g, "-");
+        downloadText(`${safeName}__${tsTag}.json`, JSON.stringify(dsl, null, 2), "application/json");
+        $q.notify({
+            type: "positive",
+            message: `Exported snapshot from ${new Date(archive.archived_at).toLocaleString()}`,
+            position: "bottom",
+        });
+    } catch (e) {
+        $q.notify({ type: "negative", message: `Export failed: ${errMsg(e)}`, position: "bottom" });
+    } finally {
+        exportingId.value = null;
     }
 }
 
