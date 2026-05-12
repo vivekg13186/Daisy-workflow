@@ -231,10 +231,13 @@ function fieldFromSchema(bind, label, def, isRequired) {
   //      · format: "textarea"   (preferred)
   //      · format: "multiline"
   //      · contentMediaType: "text/plain"
-  //    Used by plugins like `transform` whose `expression` field is a
-  //    raw FEEL block and benefits from a multi-line edit surface.
+  //    Also fires for no-type fields tagged with `format: "textarea"` —
+  //    used by plugins like `memory.set` where `value` accepts any
+  //    shape (the engine resolves `${var}` to typed output before the
+  //    plugin runs), but the editing surface benefits from multi-line
+  //    + a placeholder hint.
   if (
-    def.type === "string" &&
+    (def.type === "string" || def.type === undefined) &&
     (def.format === "textarea" ||
      def.format === "multiline" ||
      def.contentMediaType === "text/plain")
@@ -260,11 +263,15 @@ function fieldFromSchema(bind, label, def, isRequired) {
              hint: def.description || "Edit as JSON",
              placeholder: def.placeholder };
   }
-  // 8) default → string input. Includes URL formatting via validation.
+  // 8) default → string input. Includes URL formatting via validation
+  //    and honours a custom `placeholder` so plugins can hint at the
+  //    expected shape (e.g. `${someVar}`).
   return {
     ui_type: "input",
     type: def.format === "uri" ? "url" : "text",
-    label, bind, validation, hint: def.description,
+    label, bind, validation,
+    hint: def.description,
+    placeholder: def.placeholder,
   };
 }
 

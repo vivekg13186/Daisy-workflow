@@ -6,27 +6,11 @@ or operating them.
 Plugins live in two places: **in-process** (core + drop-ins under
 `plugins-extra/`) and **HTTP-transport** (separate containers
 exposing a small four-endpoint contract). Both kinds register in
-the same `plugins` DB table; the engine dispatches based on
+the same `plugins` Postgres table; the engine dispatches based on
 `transport_kind`.
 
-The system grew in four phases — each one is documented here:
-
-- **Phase 1**: DB-backed registry + HTTP transport + one example
-  external plugin authored without an SDK.
-- **Phase 2**: `@daisy-dag/plugin-sdk` (drops author boilerplate
-  from ~170 to ~25 lines) + admin Plugins page in the frontend
-  (install / enable / disable / uninstall / refresh).
-- **Phase 3**: multi-version side-by-side, `name@version` action
-  pinning, marketplace catalog browse, SHA-256 checksum-verified
-  install, and a background `/readyz` healthcheck poller. See
-  [Phase 3 specifics](#phase-3-specifics).
-- **Phase 4**: LLM-driven plugin generator — admins describe a
-  plugin in English on the Plugins page, the agent emits a complete
-  scaffold + deploy instructions, the admin reviews and downloads.
-  See the [Plugin-generator agent](#plugin-generator-agent-ask-agent)
-  section.
-
-The existing in-process plugin path is unchanged across all phases.
+The DSL author doesn't know or care which transport a plugin uses —
+they just reference the action by name (or by `name@version` to pin).
 
 ## The four-endpoint contract
 
@@ -42,7 +26,7 @@ An HTTP-transport plugin is *any process* exposing:
 The plugin's language is irrelevant — Node, Python, Go, Rust, all
 work as long as they implement those four routes.
 
-### /execute payload
+### `/execute` payload
 
 The core POSTs this JSON:
 
@@ -74,14 +58,14 @@ JSON file.
 
 ```json
 {
-  "name":          "reddit.search",
-  "version":       "0.1.0",
-  "description":   "Search public Reddit posts.",
+  "name":             "reddit.search",
+  "version":          "0.1.0",
+  "description":      "Search public Reddit posts.",
   "engineMinVersion": "0.2.0",
-  "primaryOutput": "posts",
-  "inputSchema":   { "type": "object", "required": ["query"], "properties": { ... } },
-  "outputSchema":  { "type": "object", "properties": { "posts": { "type": "array" } } },
-  "configRefs":    [
+  "primaryOutput":    "posts",
+  "inputSchema":      { "type": "object", "required": ["query"], "properties": { ... } },
+  "outputSchema":     { "type": "object", "properties": { "posts": { "type": "array" } } },
+  "configRefs": [
     { "name": "reddit", "type": "reddit.oauth", "required": false }
   ],
   "ui": { "category": "social", "icon": "reddit" }
@@ -90,8 +74,44 @@ JSON file.
 
 `configRefs` declares which workspace configurations the plugin
 needs. The core resolves them from `ctx.config[ref.name]` and
-includes the **plaintext** values in the `/execute` payload —
-plugins don't need an auth path back to the core for secrets.
+includes the **plaintext** values in the `/execute` payload — plugins
+don't need an auth path back to the core for secrets.
+
+## Multi-version side-by-side
+
+A plugin's primary key is `(name, version)`. Two flavours of the same
+plugin can coexist:
+
+```
+postgres=# SELECT name, version, is_default, enabled FROM plugins WHERE name='reddit.search';
+     name       | version | is_default | enabled
+----------------+---------+------------+---------
+ reddit.search  | 0.1.0   | f          | t
+ reddit.search  | 0.2.0   | t          | t
+```
+
+A partial unique index ensures at most one `is_default = true` per
+plugin name.
+
+### `name@version` pinning in the DSL
+
+DAGs reference a plugin by `action` name. Unpinned refs resolve to
+the row marked `is_default = true`:
+
+```json
+{ "action": "reddit.search", "inputs": { "query": "${vars.q}" } }
+```
+
+To freeze a workflow against a specific version, append `@<semver>`:
+
+```json
+{ "action": "reddit.search@0.1.0", "inputs": { "query": "${vars.q}" } }
+```
+
+The registry exposes a `parsePluginRef(actionId)` helper that splits
+the string and returns `{ name, version }`. If a pinned version
+doesn't exist the engine throws a clear error at parse time, not at
+execute time.
 
 ## Boot sequence
 
@@ -118,9 +138,32 @@ The pre-migration boot path (no plugins table yet) falls back to
 in-memory builtins so dev environments still work before running
 `npm run migrate`.
 
+## Admin API
+
+| Method | Path                                       | What it does |
+|--------|--------------------------------------------|--------------|
+| GET    | `/plugins`                                 | List + status (any signed-in user). |
+| POST   | `/plugins/install`                         | Install an HTTP plugin by pointing at its endpoint. |
+| POST   | `/plugins/refresh`                         | Reload the in-memory registry from DB. |
+| POST   | `/plugins/:name/enable`                    | Enable. |
+| POST   | `/plugins/:name/disable`                   | Disable. Workflows referencing it fail loudly. |
+| DELETE | `/plugins/:name`                           | Uninstall every version. Refused for `source=core` (disable instead). |
+| DELETE | `/plugins/:name/:version`                  | Uninstall one specific version. |
+| POST   | `/plugins/:name/:version/set-default`      | Promote a version to default for unpinned action refs. |
+| GET    | `/plugins/catalog?refresh=1`               | Marketplace catalog (cached 5min; `?refresh=1` bypasses). |
+| POST   | `/plugins/install-from-catalog`            | Checksum-verified install from a catalog entry. |
+| POST   | `/plugins/agent/generate`                  | LLM drafts a plugin scaffold from a free-form prompt. |
+| POST   | `/plugins/agent/download`                  | Bundles a generated scaffold into an `application/zip`. |
+
+All mutating endpoints are admin-only. Every action audit-logs under
+`plugin.install` / `plugin.enable` / `plugin.disable` /
+`plugin.uninstall` / `plugin.set-default` / `plugin.agent.generate` /
+`plugin.agent.download` so the trail of "who installed what when" is
+preserved.
+
 ## Installing an external plugin
 
-Two paths — both produce the same plugins-table row.
+Two paths — both produce the same `plugins` row.
 
 ### CLI
 
@@ -130,52 +173,29 @@ docker compose -f docker-compose.yml \
                -f docker-compose.plugins.yml \
                --profile full up -d
 
-# 2. Install — fetches /manifest, verifies it, persists.
+# 2. Install — fetches /manifest, validates it, persists.
 cd backend
 npm run install-plugin -- --endpoint http://reddit-plugin:8080
 
 # 3. Reload the registry so the engine sees the new row without
-#    a full restart. (Admin only — see API below.)
+#    a full restart.
 curl -X POST http://localhost:3000/plugins/refresh \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-### Admin API
+### Admin UI
 
-```
-POST /plugins/install
-{
-  "endpoint": "http://reddit-plugin:8080",
-  "source":   "local"
-}
-```
+UserMenu → **Plugins** → *Installed* tab → **Install from URL**.
+Daisy probes `/manifest`, validates it, persists, then probes
+`/readyz` to seed the initial `status`.
 
-Admin only. Returns the row that landed in the table.
+## Authoring an external plugin — with the SDK
 
-Other admin operations on the same path:
-
-| Method | Path                                       | What it does |
-|--------|--------------------------------------------|--------------|
-| GET    | `/plugins`                                 | List + status (any signed-in user). |
-| POST   | `/plugins/install`                         | Install / upgrade an HTTP plugin from its endpoint. |
-| POST   | `/plugins/refresh`                         | Reload the in-memory registry from DB. |
-| POST   | `/plugins/:name/disable`                   | Temporarily disable. Workflows referencing it fail loudly. |
-| POST   | `/plugins/:name/enable`                    | Re-enable. |
-| DELETE | `/plugins/:name`                           | Uninstall every version. Refused for `source=core` (disable instead). |
-| DELETE | `/plugins/:name/:version`                  | Uninstall one specific version (Phase 3). |
-| POST   | `/plugins/:name/:version/set-default`      | Promote a version to the default for unpinned action refs (Phase 3). |
-| GET    | `/plugins/catalog?refresh=1`               | Marketplace catalog (Phase 3). |
-| POST   | `/plugins/install-from-catalog`            | Checksum-verified install from a catalog entry (Phase 3). |
-| POST   | `/plugins/agent/generate`                  | LLM drafts a plugin scaffold from a free-form prompt (Phase 4). |
-| POST   | `/plugins/agent/download`                  | Bundles a generated scaffold into an `application/zip` (Phase 4). |
-
-## Authoring an external plugin — with the SDK (Phase 2)
-
-`@daisy-dag/plugin-sdk` lives in `plugin-sdk/` of the repo. It
+`@daisy-dag/plugin-sdk` lives in [`plugin-sdk/`](../plugin-sdk/). It
 wires the four endpoints, validates the manifest, threads the
-engine's `AbortSignal` and `deadlineMs`, handles graceful
-shutdown, and produces JSON log lines on stdout — leaving the
-plugin author to write only `execute()`.
+engine's `AbortSignal` and `deadlineMs`, handles graceful shutdown,
+and produces JSON log lines on stdout — leaving the plugin author to
+write only `execute()`.
 
 ```js
 // plugins-external/myplugin/index.js
@@ -202,36 +222,36 @@ servePlugin({
 });
 ```
 
-That's the whole plugin. ~25 lines. Compare with the pre-SDK
-version under the git history of `plugins-external/reddit/`
-which was ~170 lines for the same behaviour.
+That's the whole plugin. ~25 lines.
 
 ### Packaging
 
-`plugins-external/reddit/package.json` uses the SDK as a local
-file dependency:
+`plugins-external/<name>/package.json` uses the SDK as a local file
+dependency:
 
 ```json
 {
+  "type": "module",
   "dependencies": {
     "@daisy-dag/plugin-sdk": "file:../../plugin-sdk"
-  }
+  },
+  "scripts": { "start": "node index.js" }
 }
 ```
 
-The Dockerfile uses the **repo root** as the build context so the
-SDK folder is reachable during `npm install` (the
-`file:../../plugin-sdk` reference would otherwise fail with
-"path outside build context"):
+The Dockerfile uses the **repo root** as the build context so the SDK
+folder is reachable during `npm install` (the
+`file:../../plugin-sdk` reference would otherwise fail with "path
+outside build context"):
 
 ```dockerfile
 FROM node:22-alpine
 WORKDIR /workspace
 
-COPY plugin-sdk              /workspace/plugin-sdk
-COPY plugins-external/reddit /workspace/plugins-external/reddit
+COPY plugin-sdk                 /workspace/plugin-sdk
+COPY plugins-external/<name>    /workspace/plugins-external/<name>
 
-WORKDIR /workspace/plugins-external/reddit
+WORKDIR /workspace/plugins-external/<name>
 RUN npm install --omit=dev
 USER node
 CMD ["node", "index.js"]
@@ -240,146 +260,21 @@ CMD ["node", "index.js"]
 And the compose entry passes context + dockerfile separately:
 
 ```yaml
-reddit-plugin:
+<name>-plugin:
   build:
     context: .
-    dockerfile: plugins-external/reddit/Dockerfile
+    dockerfile: plugins-external/<name>/Dockerfile
 ```
 
-Once published to npm (a Phase 3 item), authors will just `npm
-install @daisy-dag/plugin-sdk` and forget about the relative path.
+The example external plugin (`plugins-external/reddit/`) follows this
+pattern end-to-end.
 
-## Admin UI (Phase 2)
-
-The `/plugins` page (admin only — UserMenu → **Plugins**) lists
-every registered plugin with version, source, transport, status,
-and an enabled toggle. Four actions:
-
-| Button / control | What it does |
-|------------------|--------------|
-| **Install plugin** (toolbar) | Dialog accepts an endpoint URL. POST `/plugins/install` fetches `/manifest`, validates it, persists. |
-| **Enabled** toggle | Flips `enabled` flag in DB + reloads the in-memory registry. Disabled plugins disappear from the node palette but stay in the table for re-enable. |
-| **Refresh** (toolbar) | Re-reads the plugins table into the engine's in-memory cache. Useful after a direct SQL edit. |
-| **Trash icon** (per row, non-core only) | Uninstalls the plugin entirely. Core plugins are protected — the icon shows a lock instead. |
-
-Every action audit-logs under `plugin.install` / `plugin.enable` /
-`plugin.disable` / `plugin.uninstall` so the trail of "who
-installed what when" is preserved.
-
-The Plugins page is admin-only because the actions all carry
-infrastructure consequences (network reach into your container
-network, exposure of config plaintexts to third-party code).
-
-## What ctx serialisation means for plugins
-
-In-process plugins see the full live `ctx` object — `ctx.execution`,
-`ctx.memory`, `ctx.config`, `ctx.nodes`, etc.
-
-HTTP plugins see a **JSON-only subset**:
-
-- `input` — the resolved inputs (post `${...}` expansion).
-- `executionId`, `workspaceId`, `nodeName` — for the plugin to
-  log / trace correctly.
-- `config` — only the configs the plugin declared via `configRefs`.
-
-Plugins that need access to a richer slice of state (e.g. read
-other nodes' outputs) should accept that as explicit `input`
-fields — the workflow author wires it via `${nodes.foo.output}`.
-Stays explicit, no implicit globals.
-
-## What's still not in scope
-
-- **Streaming over the wire.** The agent's `hooks.stream.text()`
-  hook stays in-process-only. HTTP plugins return their final
-  output synchronously. A future SSE-style callback URL is on the
-  roadmap.
-- **Signed manifests (PGP / cosign).** Phase 3 ships
-  SHA-256 manifest checksums (catalog declares a `manifestSha256`,
-  the server verifies on download). Full code-signing is a
-  later phase.
-- **Auto-launch containers.** Daisy does not pull or run plugin
-  images for you. The operator brings up the container; Daisy
-  then probes its endpoint.
-
-## Trust + security
-
-Installing a third-party plugin grants it:
-
-- Network access from inside your docker network (or k8s namespace).
-- Plaintext values of every workspace configuration its manifest
-  declares via `configRefs`. **Review the manifest before
-  installing.**
-
-There is no sandbox. Plugins run as their container's user; the
-isolation is whatever Docker / k8s gives you. For multi-tenant
-deployments with untrusted plugin authors, run each plugin under
-a strict network policy (no egress except to its known
-dependencies) and a non-root, no-privileged container.
-
-## File map
-
-| File | Role |
-|------|------|
-| `backend/migrations/018_plugins.sql` | plugins table (Phase 1) |
-| `backend/migrations/019_plugins_versions.sql` | multi-version PK + catalog/checksum metadata (Phase 3) |
-| `backend/src/plugins/registry.js`    | DB-backed registry + invoke dispatch + version-aware lookup |
-| `backend/src/plugins/install.js`     | fetch /manifest, validate, checksum-verify, persist |
-| `backend/src/plugins/catalog.js`     | marketplace catalog loader + 5-minute cache (Phase 3) |
-| `backend/src/plugins/healthcheck.js` | background `/readyz` poller (Phase 3) |
-| `backend/src/plugins/agent/generate.js` | LLM plugin-generator agent (Phase 4) |
-| `backend/src/api/plugins.js`         | admin install/enable/disable/uninstall + catalog + set-default + agent |
-| `backend/src/cli/installPlugin.js`   | `npm run install-plugin -- --endpoint URL` |
-| `backend/test/plugin-http-transport.test.js` | install + manifest validation tests |
-| `backend/test/plugin-phase3.test.js`         | checksum verify + parsePluginRef + catalog loader |
-| `backend/test/plugin-agent.test.js`          | agent JSON-parser + validator + path-traversal guard (Phase 4) |
-| `plugin-sdk/`                        | `@daisy-dag/plugin-sdk` — servePlugin() + manifest validation |
-| `plugin-sdk/README.md`               | author-facing usage docs |
-| `plugins-external/reddit/`           | example external plugin (SDK-driven, ~25 lines) |
-| `docker-compose.plugins.yml`         | overlay that brings up external plugins |
-| `deploy/plugin-catalog.example.json` | sample marketplace catalog (Phase 3 fallback) |
-| `frontend/src/pages/PluginsPage.vue` | admin Plugins page (tabs: Installed / Browse marketplace) |
-
-## Phase 3 specifics
-
-### Multi-version side-by-side
-
-A plugin's primary key is now `(name, version)`. Two flavours of
-the same plugin can coexist:
-
-```
-postgres=# SELECT name, version, is_default, enabled FROM plugins WHERE name='reddit.search';
-    name        | version | is_default | enabled
-----------------+---------+------------+---------
- reddit.search  | 0.1.0   | f          | t
- reddit.search  | 0.2.0   | t          | t
-```
-
-#### `name@version` pinning in the DSL
-
-DAGs reference a plugin by `action` name. Unpinned refs resolve to
-the row marked `is_default = true`:
-
-```json
-{ "action": "reddit.search", "inputs": { "query": "${vars.q}" } }
-```
-
-To freeze a workflow against a specific version, append `@<semver>`:
-
-```json
-{ "action": "reddit.search@0.1.0", "inputs": { "query": "${vars.q}" } }
-```
-
-The registry exposes a `parsePluginRef(actionId)` helper which
-splits the string and returns `{ name, version }`. If the pinned
-version doesn't exist the engine throws a clear error at parse
-time, not at execute time.
-
-### Marketplace catalog
+## Marketplace catalog
 
 A catalog is a single JSON document describing installable plugins.
 Source order:
 
-1. `PLUGIN_CATALOG_URL` — fetched on demand (5-minute cache, set
+1. `PLUGIN_CATALOG_URL` — fetched on demand (5-minute cache; set
    `?refresh=1` on the endpoint to bypass).
 2. `PLUGIN_CATALOG_FILE` — local-disk fallback. Defaults to
    `deploy/plugin-catalog.example.json`. Handy for air-gapped
@@ -408,8 +303,8 @@ Source order:
 ```
 
 `manifestSha256` is **strongly recommended** in any production
-catalog — the install path computes the hash on the raw manifest
-body before parsing and rejects on mismatch.
+catalog — the install path computes the hash on the raw manifest body
+before parsing and rejects on mismatch.
 
 ### Install from catalog
 
@@ -436,33 +331,33 @@ The flow:
    with manifest_sha256, catalog_entry_url, source='marketplace:<url>'
 ```
 
-### Background healthcheck
+## Background healthcheck
 
 `backend/src/plugins/healthcheck.js` starts on worker boot. Every
 `PLUGIN_HEALTHCHECK_INTERVAL_MS` (default 60s) it probes
-`<endpoint>/readyz` on every `enabled=true` HTTP-transport row.
-A 2xx response wipes the failure streak and sets `status='healthy'`.
+`<endpoint>/readyz` on every `enabled = true` HTTP-transport row. A
+2xx response wipes the failure streak and sets `status='healthy'`.
 Otherwise the streak increments; once it hits
 `PLUGIN_HEALTHCHECK_DOWN_AFTER` (default 3) consecutive failures the
-row flips from `degraded` to `down`. The Plugins page renders
-these states with coloured badges and shows the last error.
+row flips from `degraded` to `down`. The Plugins page renders these
+states with coloured badges and shows the last error.
 
-Relevant env vars:
+Env vars:
 
 | Name                                   | Default | Meaning |
 |----------------------------------------|---------|---------|
-| `PLUGIN_HEALTHCHECK_INTERVAL_MS`       | 60000   | Poll cadence. Set < 5000 to disable. |
+| `PLUGIN_HEALTHCHECK_INTERVAL_MS`       | 60000   | Poll cadence. Set `< 5000` to disable. |
 | `PLUGIN_HEALTHCHECK_TIMEOUT_MS`        | 3000    | Per-probe abort timeout. |
 | `PLUGIN_HEALTHCHECK_DOWN_AFTER`        | 3       | Consecutive failures before status → `down`. |
 | `PLUGIN_CATALOG_URL`                   | _unset_ | Remote catalog HTTPS endpoint. |
 | `PLUGIN_CATALOG_FILE`                  | `deploy/plugin-catalog.example.json` | Local-disk catalog fallback. |
 
-### Plugin-generator agent ("Ask agent")
+## Plugin-generator agent ("Ask agent")
 
-The Plugins page exposes an **Ask agent** button on the *Installed* tab.
-It runs the user's free-form prompt through the same LLM provider the
-rest of the app uses (Anthropic or OpenAI-compatible — see
-`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) and returns a complete
+The Plugins page exposes an **Ask agent** button on the *Installed*
+tab. It runs the user's free-form prompt through the same LLM
+provider the rest of the app uses (Anthropic or OpenAI-compatible —
+see `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) and returns a complete
 HTTP-transport plugin scaffold:
 
 | File             | Role |
@@ -473,8 +368,8 @@ HTTP-transport plugin scaffold:
 | `Dockerfile`     | `node:22-alpine`, copies `plugin-sdk` + plugin folder, runs as `node`. |
 | `README.md`      | Brief description + I/O shape + required configs. |
 
-Plus a markdown **Deploy** tab the UI renders inline with build / run /
-install commands.
+Plus a markdown **Deploy** tab the UI renders inline with build / run
+/ install commands.
 
 Backend wiring:
 
@@ -490,14 +385,10 @@ deploy tab), clicks **Download zip**, unpacks under
 `plugins-external/<name>/` in their repo, brings the container up,
 then completes the usual `Install from URL` flow on the same page.
 
-Every generation and download lands in the audit log under
-`plugin.agent.generate` / `plugin.agent.download` so the trail of
-"who asked the agent to draft what" is preserved.
+### Generation contract
 
-#### Generation contract
-
-The system prompt forces the model to emit a single strict JSON object.
-`backend/src/plugins/agent/generate.js` then:
+The system prompt forces the model to emit a single strict JSON
+object. `backend/src/plugins/agent/generate.js` then:
 
 1. Strips any ` ```json ` fences the model might wrap the response in.
 2. Slices to the outermost `{...}` block (tolerates trailing prose).
@@ -512,16 +403,18 @@ The download endpoint mirrors the files under
 `plugins-external/<name>/<file>` inside the zip so the operator can
 unpack straight into their repo root.
 
-### Admin UI
+## Admin UI
 
-The Plugins page has two tabs:
+The `/plugins` page (admin only — UserMenu → **Plugins**) has two
+tabs:
 
-- **Installed** — same per-row info as Phase 2. When multiple
-  versions of the same plugin coexist the row marked default is
-  badged `default`; other rows expose a **Set default** action. The
-  uninstall icon scopes to the row's `(name, version)` pair when
-  the name has multiple versions; otherwise it removes everything
-  (matching the legacy single-version behaviour).
+- **Installed** — every registered plugin with version, source,
+  transport, status, and an enabled toggle. When multiple versions of
+  the same plugin coexist, the default row is badged `default` and
+  other rows expose a **Set default** action. The uninstall icon
+  scopes to the row's `(name, version)` pair; for single-version
+  plugins it removes the only row. Core plugins are protected — the
+  delete icon is a lock.
 - **Browse marketplace** — fetches `/plugins/catalog`, renders each
   entry as a card with summary, tags, and category. The **Install
   snippet** button surfaces a paste-ready `docker-compose.yml`
@@ -531,3 +424,78 @@ The Plugins page has two tabs:
   and POSTs to `/plugins/install-from-catalog`. Categories drive a
   filter dropdown; a free-text search matches name, summary, and
   tags.
+
+The Plugins page is admin-only because the actions all carry
+infrastructure consequences (network reach into your container
+network, exposure of config plaintexts to third-party code).
+
+## What ctx serialisation means for plugins
+
+In-process plugins see the full live `ctx` object — `ctx.execution`,
+`ctx.memory`, `ctx.config`, `ctx.nodes`, etc.
+
+HTTP plugins see a **JSON-only subset**:
+
+- `input` — the resolved inputs (post `${...}` expansion).
+- `executionId`, `workspaceId`, `nodeName` — for the plugin to log
+  / trace correctly.
+- `config` — only the configs the plugin declared via `configRefs`.
+
+Plugins that need access to a richer slice of state (e.g. read other
+nodes' outputs) should accept that as explicit `input` fields — the
+workflow author wires it via `${nodes.foo.output}`. Stays explicit,
+no implicit globals.
+
+## Trust + security
+
+Installing a third-party plugin grants it:
+
+- Network access from inside your docker network (or k8s namespace).
+- Plaintext values of every workspace configuration its manifest
+  declares via `configRefs`. **Review the manifest before
+  installing.**
+
+There is no sandbox. Plugins run as their container's user; the
+isolation is whatever Docker / k8s gives you. For multi-tenant
+deployments with untrusted plugin authors, run each plugin under a
+strict network policy (no egress except to its known dependencies)
+and a non-root, no-privileged container.
+
+The marketplace install path adds SHA-256 manifest checksum
+verification on top of this — the catalog declares a `manifestSha256`,
+the install endpoint refuses anything that doesn't match. Full
+code-signing (PGP / cosign) is on the roadmap.
+
+## Not in scope (yet)
+
+- **Streaming over the wire.** The agent's `hooks.stream.text()` hook
+  stays in-process-only. HTTP plugins return their final output
+  synchronously. A future SSE-style callback URL is on the roadmap.
+- **Auto-launch containers.** Daisy does not pull or run plugin
+  images for you. The operator brings up the container; Daisy then
+  probes its endpoint.
+- **Full code-signing.** SHA-256 manifest checksums are verified
+  today; PGP / cosign signature verification is a later phase.
+
+## File map
+
+| File | Role |
+|------|------|
+| `backend/migrations/018_plugins.sql`         | plugins table |
+| `backend/migrations/019_plugins_versions.sql`| multi-version PK + catalog/checksum metadata |
+| `backend/src/plugins/registry.js`            | DB-backed registry + invoke dispatch + version-aware lookup |
+| `backend/src/plugins/install.js`             | fetch `/manifest`, validate, checksum-verify, persist |
+| `backend/src/plugins/catalog.js`             | marketplace catalog loader + 5-minute cache |
+| `backend/src/plugins/healthcheck.js`         | background `/readyz` poller |
+| `backend/src/plugins/agent/generate.js`      | LLM plugin-generator agent |
+| `backend/src/api/plugins.js`                 | admin API surface |
+| `backend/src/cli/installPlugin.js`           | `npm run install-plugin -- --endpoint URL` |
+| `backend/test/plugin-http-transport.test.js` | install + manifest validation tests |
+| `backend/test/plugin-phase3.test.js`         | checksum verify + parsePluginRef + catalog loader |
+| `backend/test/plugin-agent.test.js`          | agent JSON parser + validator + path-traversal guard |
+| `plugin-sdk/`                                | `@daisy-dag/plugin-sdk` — `servePlugin()` + manifest validation |
+| `plugin-sdk/README.md`                       | author-facing usage docs |
+| `plugins-external/reddit/`                   | example external plugin (SDK-driven, ~25 lines) |
+| `docker-compose.plugins.yml`                 | overlay that brings up external plugins |
+| `deploy/plugin-catalog.example.json`         | sample marketplace catalog (local-disk fallback) |
+| `frontend/src/pages/PluginsPage.vue`         | admin Plugins page (tabs: Installed / Browse marketplace) |

@@ -233,6 +233,11 @@ export const Triggers = {
   create: (data) => api.post("/triggers", data).then(r => r.data),
   update: (id, patch) => api.put(`/triggers/${id}`, patch).then(r => r.data),
   remove: (id) => api.delete(`/triggers/${id}`).then(r => r.data),
+  // Manual "Run now" — fire the trigger once on demand. Returns
+  // { executionId, graphId } so the caller can deep-link the user.
+  // Works whether the trigger is enabled or not.
+  fire:   (id, payload = {}) =>
+    api.post(`/triggers/${id}/fire`, { payload }).then(r => r.data),
 };
 
 // Admin user management. All endpoints are admin-only on the server.

@@ -11,6 +11,18 @@
 
 <template>
   <div v-if="visible" class="user-menu">
+    <!-- Theme toggle — sits next to the avatar so it's a one-click
+         affordance from any page rather than buried in the menu. -->
+    <q-btn
+      round flat dense class="theme-btn"
+      :icon="theme.mode === 'dark' ? 'light_mode' : 'dark_mode'"
+      @click="onToggleTheme"
+    >
+      <q-tooltip>
+        {{ theme.mode === "dark" ? "Switch to light theme" : "Switch to dark theme" }}
+      </q-tooltip>
+    </q-btn>
+
     <q-btn round flat dense class="user-btn" no-caps>
       <q-avatar size="30px" color="primary" text-color="white">
         {{ initials }}
@@ -95,11 +107,26 @@
 <script setup>
 import { ref, computed, watch, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useQuasar } from "quasar";
 import { auth } from "../stores/auth.js";
+import { theme } from "../stores/theme.js";
 import { Workspaces } from "../api/client.js";
 
 const route  = useRoute();
 const router = useRouter();
+const $q     = useQuasar();
+
+// Keep Quasar's own dark mode in lockstep with our theme store. We
+// still drive our CSS variables via the `html[data-theme]` attribute
+// (the store does that), but Quasar's components (dialogs, q-table,
+// q-menu) have their own dark-aware classes that we toggle here.
+watch(
+  () => theme.mode,
+  (m) => { $q?.dark?.set(m === "dark"); },
+  { immediate: true },
+);
+
+function onToggleTheme() { theme.toggle(); }
 
 const workspaces = ref([]);
 
@@ -165,17 +192,23 @@ async function onLogout() {
   top: 6px;
   right: 8px;
   z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+.theme-btn,
 .user-btn {
   width: 36px;
   height: 36px;
-  background: white;
-  border: 1px solid #e2e8f0;
+  background: var(--surface, white);
+  border: 1px solid var(--border, #e2e8f0);
   border-radius: 50%;
   padding: 0;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
+.theme-btn:hover,
 .user-btn:hover {
   box-shadow: 0 2px 6px rgba(15, 23, 42, 0.14);
 }
+.theme-btn :deep(.q-icon) { font-size: 18px; color: var(--text, #1f2937); }
 </style>

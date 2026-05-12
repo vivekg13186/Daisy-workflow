@@ -19,9 +19,9 @@
   <div class="login-page q-pa-md">
     <q-card class="login-card q-mx-auto" flat bordered>
       <q-card-section class="text-center">
-        <div class="text-h5">Sign in to Daisy-DAG</div>
+        <div class="text-h5">Sign in</div>
         <div class="text-caption text-grey-7 q-mt-xs">
-          Workflow engine — local accounts
+          Daisy Workflow engine
         </div>
       </q-card-section>
 
@@ -57,7 +57,8 @@
             {{ errorMessage }}
           </q-banner>
 
-          <q-btn
+          <div class="q-pd-md">
+   <q-btn
             type="submit"
             color="primary"
             class="full-width"
@@ -65,6 +66,8 @@
             label="Sign in"
             unelevated
           />
+          </div>
+       
 
           <div v-if="oidcEnabled" class="row items-center q-my-sm">
             <q-separator class="col" />
@@ -175,7 +178,7 @@ function onOidcClick() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--surface-bg, #f6f7f9);
+  
 }
 .login-card {
   width: 100%;

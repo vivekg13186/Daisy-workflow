@@ -35,6 +35,12 @@ export default {
       namespace:   input.namespace || "kv",
       key:         input.key,
     });
+    // Keep ctx.memory in sync with the DB so downstream
+    // ${memory.<key>} reads undefined / null instead of the stale
+    // pre-run value.
+    if (ctx?.memory && typeof ctx.memory === "object") {
+      delete ctx.memory[input.key];
+    }
     return { key: input.key, deleted };
   },
 };

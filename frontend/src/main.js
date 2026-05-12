@@ -12,16 +12,21 @@ import "@vue-flow/core/dist/style.css";
 import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/controls/dist/style.css";
 import "./styles.css";
+// Import the theme store at boot — its module-side `watchEffect`
+// applies the saved theme to <html data-theme="…"> before any
+// component mounts, so the page never flashes the wrong palette.
+import { theme } from "./stores/theme.js";
 import {router} from "./routes";
 import App from "./App.vue";
 const routes = createApp(App)
   .use(router)
   .use(Quasar, {
     plugins: { Notify, Dialog },
-    // Light theme is the only theme. Brand colors mirror the CSS tokens in
-    // styles.css so q-btn/color="primary" matches our design palette.
+    // Light + dark both supported. The theme store (stores/theme.js)
+    // owns the live mode and persists it in localStorage. The user
+    // menu's watcher syncs $q.dark with the store.
     config: {
-      dark: false,
+      dark: theme.mode === "dark",
       brand: {
         primary:   "#2f6df3",
         secondary: "#475569",

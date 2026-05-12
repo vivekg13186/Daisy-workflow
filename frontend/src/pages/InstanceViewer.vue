@@ -489,10 +489,57 @@ const failedNodes = computed(() => {
 });
 
 // nodeStatus map for GraphView: { [nodeName]: status }
+//
+// Three sources contribute:
+//   1. ctxNodes        — execution.context.nodes (only present after the run
+//                        completes; the worker writes it once at the end).
+//   2. node_states     — durable per-node rows from `persistNodeState`,
+//                        updated incrementally during the run and re-fetched
+//                        by the 2.5s poll loop. Carries `node_name` + `status`.
+//   3. liveStatuses    — real-time `node:status` WS events. Lets us flip
+//                        upstream nodes to "success" the moment they
+//                        finish, even while a slow downstream node
+//                        (e.g. `delay`) is still running — without this,
+//                        ctxNodes is empty until the entire run completes
+//                        and the graph view would render every node as
+//                        "pending" for the duration of the delay.
+//
+// Naïve "freshest wins" merge order isn't right because WS events can
+// drop or arrive out of order. If a SUCCESS event for the last node
+// is lost, liveStatuses stays on "running" forever; if it overrode
+// node_states / ctxNodes the user would see the node stuck on
+// "running" after the run actually ended.
+//
+// Use STATUS PRIORITY instead: terminal states (success/failed/skipped)
+// always beat transient ones (running/pending). Whichever source has
+// the most advanced status wins, regardless of which sources contributed.
+const STATUS_PRIORITY = {
+    success: 100,
+    failed:  100,
+    skipped: 100,
+    waiting: 80,
+    running: 50,
+    queued:  30,
+    pending: 10,
+};
+function statusRank(s) { return STATUS_PRIORITY[s] ?? 0; }
+
 const nodeStatus = computed(() => {
     const out = {};
+    function consider(name, s) {
+        if (!name || !s) return;
+        if (!out[name] || statusRank(s) > statusRank(out[name])) {
+            out[name] = s;
+        }
+    }
     for (const [name, n] of Object.entries(ctxNodes.value)) {
-        if (n?.status) out[name] = n.status;
+        consider(name, n?.status);
+    }
+    for (const row of execution.value?.node_states || []) {
+        consider(row?.node_name, row?.status);
+    }
+    for (const [name, s] of Object.entries(liveStatuses)) {
+        consider(name, s);
     }
     return out;
 });

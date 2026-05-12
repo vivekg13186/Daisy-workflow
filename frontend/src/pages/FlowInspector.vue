@@ -19,7 +19,9 @@
     <q-layout view="hHh lpR fFf">
         <q-header class="app-header">
             <q-toolbar class="app-toolbar">
-                     <q-img src="/dag_logo_trans.png" style="width: 28px; height: 28px;" class="q-mr-sm" @click="goHome" />
+                     <q-img 
+                      :src="$q.dark.isActive ? '/dag_logo_dark.png' : '/dag_logo_light.png'"
+                       style="width: 28px; height: 28px;" class="q-mr-sm" @click="goHome" />
                 <q-toolbar-title>
                    Flow Inspector
                    
@@ -85,6 +87,15 @@
                             <q-input v-model="execFilter" borderless dense debounce="200" placeholder="Search">
                                 <template v-slot:append><q-icon name="search" /></template>
                             </q-input>
+                            <q-btn
+                                flat dense round
+                                icon="refresh"
+                                class="q-ml-sm"
+                                :loading="loading"
+                                @click="reload"
+                            >
+                                <q-tooltip>Refresh executions</q-tooltip>
+                            </q-btn>
                         </template>
 
                         <template v-slot:body-cell-status="props">
@@ -151,21 +162,29 @@
 
                         <template v-slot:body-cell-actions="props">
                             <q-td :props="props" auto-width>
+                                <!-- Run-now is always available (whether subscribed or not). -->
                                 <q-btn
-                                    v-if="!props.row.enabled"
                                     icon="play_arrow" flat round dense size="sm" color="positive"
                                     :loading="busy[props.row.id]"
-                                    @click="startTrigger(props.row)"
+                                    @click.stop="fireTrigger(props.row)"
                                 >
-                                    <q-tooltip>Start</q-tooltip>
+                                    <q-tooltip>Run now</q-tooltip>
+                                </q-btn>
+                                <q-btn
+                                    v-if="!props.row.enabled"
+                                    icon="power_settings_new" flat round dense size="sm" color="grey-7"
+                                    :loading="busy[props.row.id]"
+                                    @click.stop="startTrigger(props.row)"
+                                >
+                                    <q-tooltip>Enable subscription</q-tooltip>
                                 </q-btn>
                                 <q-btn
                                     v-else
                                     icon="stop" flat round dense size="sm" color="negative"
                                     :loading="busy[props.row.id]"
-                                    @click="stopTrigger(props.row)"
+                                    @click.stop="stopTrigger(props.row)"
                                 >
-                                    <q-tooltip>Stop</q-tooltip>
+                                    <q-tooltip>Stop (disable subscription)</q-tooltip>
                                 </q-btn>
                             </q-td>
                         </template>
@@ -518,6 +537,22 @@ async function stopTrigger(row) {
         await reload();
     } catch (e) {
         notify(`Stop failed: ${errMsg(e)}`, "negative");
+    } finally {
+        busy[row.id] = false;
+    }
+}
+// Manual fire — works regardless of `enabled`. Opens the resulting
+// execution in the InstanceViewer so the user can watch it run.
+async function fireTrigger(row) {
+    if (busy[row.id]) return;
+    busy[row.id] = true;
+    try {
+        const { executionId } = await Triggers.fire(row.id);
+        notify(`Fired "${row.name}"`, "positive");
+        await reload();
+        if (executionId) router.push(`/instanceViewer/${executionId}`);
+    } catch (e) {
+        notify(`Run failed: ${errMsg(e)}`, "negative");
     } finally {
         busy[row.id] = false;
     }

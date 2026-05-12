@@ -37,8 +37,16 @@ export async function stopTriggerManager() {
   for (const [id] of active) await stopOne(id);
 }
 
-/** Public: re-sync a single trigger by id (called by API on create/update/delete). */
-export async function syncTrigger(triggerId) {
+/** Public: re-sync a single trigger by id (called by API on create/update/delete).
+ *
+ *  Pass `{ force: true }` to tear down and restart even when the trigger row's
+ *  own config blob is unchanged — needed when an *underlying* configuration
+ *  row that the trigger references by name has been edited (e.g. the user
+ *  changed the broker URL on the mqtt config row). The trigger row's blob
+ *  only stores the config NAME, not the URL, so the equality check below
+ *  can't see that change on its own.
+ */
+export async function syncTrigger(triggerId, { force = false } = {}) {
   const { rows } = await pool.query("SELECT * FROM triggers WHERE id=$1", [triggerId]);
   const row = rows[0];
 
@@ -47,15 +55,61 @@ export async function syncTrigger(triggerId) {
     await stopOne(triggerId);
     return;
   }
-  // Already running with the same config — nothing to do.
   const cur = active.get(triggerId);
-  if (cur && JSON.stringify(cur.row.config) === JSON.stringify(row.config) && cur.row.type === row.type) {
+  // Already running with the same config — nothing to do, unless caller
+  // is forcing a restart because a referenced configuration row changed.
+  if (
+    !force &&
+    cur &&
+    JSON.stringify(cur.row.config) === JSON.stringify(row.config) &&
+    cur.row.type === row.type
+  ) {
     cur.row = row;   // refresh the cached row (for last_fired_at etc.)
     return;
   }
-  // Restart with new config.
+  // Restart with the new config.
   if (cur) await stopOne(triggerId);
   await startOne(row);
+}
+
+/**
+ * Public: force-restart every trigger in a workspace that references a
+ * given configuration by name. Called by the configs API after an edit
+ * or rotate so subscriptions pick up the new URL / credentials without
+ * a worker restart.
+ *
+ * "References by name" means the trigger's config blob contains the
+ * config name as a value at any depth (e.g. `{ config: "myBroker" }` or
+ * `{ smtp: "myMailer" }`). We do this by JSON-stringifying the blob and
+ * looking for the literal value — cheap and good enough; false positives
+ * just cost an extra restart.
+ */
+export async function resyncTriggersUsingConfig(configName, workspaceId) {
+  if (!configName || !workspaceId) return 0;
+  const { rows } = await pool.query(
+    "SELECT id, config FROM triggers WHERE workspace_id = $1 AND enabled = TRUE",
+    [workspaceId],
+  );
+  const needle = JSON.stringify(configName);            // includes quotes; matches "myBroker" as a value
+  const matches = rows.filter(r => {
+    try { return JSON.stringify(r.config).includes(needle); }
+    catch { return false; }
+  });
+  let restarted = 0;
+  for (const r of matches) {
+    try {
+      await syncTrigger(r.id, { force: true });
+      restarted++;
+    } catch (e) {
+      log.warn("trigger force-resync failed", { id: r.id, error: e.message });
+    }
+  }
+  if (restarted > 0) {
+    log.info("triggers resynced after config change", {
+      configName, workspaceId, restarted,
+    });
+  }
+  return restarted;
 }
 
 async function startOne(row) {
@@ -137,3 +191,41 @@ async function fireTrigger(row, payload) {
 }
 
 export function activeCount() { return active.size; }
+
+/**
+ * Public: fire a trigger once on demand from the API. Inserts an
+ * execution row + enqueues, bypassing the live subscription. The
+ * trigger does NOT need to be enabled — this is the "Run now" path
+ * from the FlowInspector page.
+ *
+ * Returns { executionId } so the caller can deep-link the user to
+ * the InstanceViewer.
+ */
+export async function fireTriggerById(triggerId, { payload = {}, workspaceId } = {}) {
+  const params = [triggerId];
+  let sql = "SELECT * FROM triggers WHERE id = $1";
+  if (workspaceId) {
+    params.push(workspaceId);
+    sql += ` AND workspace_id = $${params.length}`;
+  }
+  const { rows } = await pool.query(sql, params);
+  const row = rows[0];
+  if (!row) throw new Error(`trigger ${triggerId} not found`);
+  const execId = uuid();
+  await pool.query(
+    `INSERT INTO executions (id, graph_id, status, inputs, context, workspace_id)
+     VALUES ($1,$2,'queued',$3,'{}'::jsonb,$4)`,
+    [execId, row.graph_id, JSON.stringify(payload), row.workspace_id],
+  );
+  await pool.query(
+    `UPDATE triggers
+       SET last_fired_at = NOW(),
+           fire_count    = fire_count + 1,
+           updated_at    = NOW()
+     WHERE id = $1`,
+    [row.id],
+  );
+  await enqueueExecution({ executionId: execId, graphId: row.graph_id });
+  log.info("trigger fired manually", { id: row.id, type: row.type, executionId: execId });
+  return { executionId: execId, graphId: row.graph_id };
+}

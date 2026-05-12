@@ -34,6 +34,9 @@ import {
 } from "../configs/registry.js";
 import { requireUser, requireRole } from "../middleware/auth.js";
 import { auditLog } from "../audit/log.js";
+import { resyncTriggersUsingConfig } from "../triggers/manager.js";
+import { evictMqttClient } from "../plugins/mqtt/util.js";
+import { log } from "../utils/logger.js";
 
 const router = Router();
 
@@ -210,6 +213,40 @@ router.put("/:id", requireRole("admin"), async (req, res, next) => {
       req, action: "config.update",
       resource: { type: "config", id: req.params.id, name: name ?? existing.name },
     });
+
+    // Side-effects: subscriptions / connection pools may now reference
+    // stale URLs / credentials. Evict + resync.
+    //
+    //   1. For mqtt configs, drop any cached TCP client keyed to the OLD
+    //      URL so the next subscribe creates a fresh socket.
+    //   2. Force-restart every trigger in this workspace that references
+    //      this config by name. Their config blob stores only the name,
+    //      so the trigger manager has no other way to notice the change.
+    //
+    // Failures are soft-logged — we don't want a healthy DB write to be
+    // reported as failed because a downstream connection didn't drop.
+    queueMicrotask(async () => {
+      try {
+        if (existing.type === "mqtt") {
+          // Decrypt the OLD row so we know what URL to evict. We tolerate
+          // any decrypt error — eviction is best-effort.
+          const oldPlain = await decryptSecrets(existing.type, existing.data || {}).catch(() => ({}));
+          if (oldPlain?.url) {
+            evictMqttClient({
+              url:      oldPlain.url,
+              username: oldPlain.username,
+              clientId: oldPlain.clientId,
+            });
+          }
+        }
+        await resyncTriggersUsingConfig(name ?? existing.name, req.user.workspaceId);
+      } catch (e) {
+        log.warn("config-update side-effects failed", {
+          configId: req.params.id, error: e.message,
+        });
+      }
+    });
+
     res.json({ id: req.params.id, updated: true });
   } catch (e) { next(e); }
 });
@@ -288,6 +325,14 @@ router.post("/:id/rotate", requireRole("admin"), async (req, res, next) => {
 // ──────────────────────────────────────────────────────────────────────────
 router.delete("/:id", requireRole("admin"), async (req, res, next) => {
   try {
+    // Capture the row BEFORE deleting so we know what to evict / resync.
+    const { rows: pre } = await pool.query(
+      "SELECT name, type, data FROM configs WHERE id=$1 AND workspace_id=$2",
+      [req.params.id, req.user.workspaceId],
+    );
+    if (pre.length === 0) throw new NotFoundError("config");
+    const existing = pre[0];
+
     const { rowCount } = await pool.query(
       "DELETE FROM configs WHERE id=$1 AND workspace_id=$2",
       [req.params.id, req.user.workspaceId],
@@ -295,8 +340,33 @@ router.delete("/:id", requireRole("admin"), async (req, res, next) => {
     if (rowCount === 0) throw new NotFoundError("config");
     await auditLog({
       req, action: "config.delete",
-      resource: { type: "config", id: req.params.id },
+      resource: { type: "config", id: req.params.id, name: existing.name },
     });
+
+    // Same side-effects as PUT: triggers referencing this name need to
+    // tear down (they'll raise "config not found" on their next subscribe,
+    // which surfaces in the trigger list's last_error and stops them
+    // attempting to use a phantom broker).
+    queueMicrotask(async () => {
+      try {
+        if (existing.type === "mqtt") {
+          const oldPlain = await decryptSecrets(existing.type, existing.data || {}).catch(() => ({}));
+          if (oldPlain?.url) {
+            evictMqttClient({
+              url:      oldPlain.url,
+              username: oldPlain.username,
+              clientId: oldPlain.clientId,
+            });
+          }
+        }
+        await resyncTriggersUsingConfig(existing.name, req.user.workspaceId);
+      } catch (e) {
+        log.warn("config-delete side-effects failed", {
+          configId: req.params.id, error: e.message,
+        });
+      }
+    });
+
     res.status(200).json({ ok: true, id: req.params.id, deleted: "config" });
   } catch (e) { next(e); }
 });

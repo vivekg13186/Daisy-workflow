@@ -108,8 +108,11 @@ const TYPE_TEMPLATES = {
   },
   mqtt: {
     label: "MQTT (subscribe to topic)",
-    config: { url: "mqtt://broker.example.com:1883", topic: "sensors/+/temp", qos: 0, parseJson: true },
-    hint: "URL: mqtt:// mqtts:// ws:// wss://. `topic` may be a string or array.",
+    // Broker URL / credentials live on a stored `mqtt` configuration row
+    // (Home → Configurations). The trigger references it by name via the
+    // `config` field below — never the URL directly.
+    config: { config: "", topic: "sensors/+/temp", qos: 0, parseJson: true },
+    hint: "Set `config` to the name of a stored mqtt configuration. `topic` may be a string or array.",
   },
   email: {
     label: "Email (IMAP inbox)",

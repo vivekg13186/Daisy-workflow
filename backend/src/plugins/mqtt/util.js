@@ -58,6 +58,32 @@ export function getMqttClient(opts) {
   return client;
 }
 
+/**
+ * Tear down + evict cached clients whose URL matches `url` (and, if
+ * provided, also match `username` / `clientId`). Used when a stored mqtt
+ * configuration row changes — the trigger manager force-restarts the
+ * subscription, but without dropping the cached TCP connection the
+ * next `getMqttClient` call would still hand out the old socket.
+ *
+ * Safe to call with a URL that isn't currently cached.
+ */
+export function evictMqttClient({ url, username, clientId } = {}) {
+  if (!url) return 0;
+  let dropped = 0;
+  for (const [k, client] of cache.entries()) {
+    let parts;
+    try { parts = JSON.parse(k); } catch { continue; }
+    if (parts[0] !== url) continue;
+    if (username != null && parts[1] !== username) continue;
+    if (clientId != null && parts[2] !== clientId) continue;
+    try { client.end(true, () => {}); } catch { /* ignore */ }
+    cache.delete(k);
+    dropped++;
+  }
+  if (dropped) log.info("mqtt clients evicted", { url, dropped });
+  return dropped;
+}
+
 /** Wait until the client is in a publishable state, with a soft timeout. */
 export function waitForConnect(client, timeoutMs = 10000) {
   if (client.connected) return Promise.resolve();

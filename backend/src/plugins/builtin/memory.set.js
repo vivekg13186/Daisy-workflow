@@ -11,13 +11,24 @@ export default {
 
   inputSchema: {
     type: "object",
-    required: ["key"],
+    required: ["key", "value"],
     properties: {
-      key:       { type: "string", title: "Key", minLength: 1 },
-      // type-less so the property panel renders a plain text input
-      // and the user types either a literal or a ${var} reference
-      // resolving to whatever shape they want stored.
-      value:     { title: "Value", placeholder: "${someVar}" },
+      key: { type: "string", title: "Key", minLength: 1 },
+      // No `type` on purpose — the value can be any shape (string,
+      // number, object, array). `format: "textarea"` is honoured by
+      // the property panel to render a multi-line input even for
+      // no-type fields, and the placeholder hint nudges users to use
+      // a `${var}` reference when they want to store typed output
+      // from an upstream node.
+      value: {
+        title: "Value",
+        format: "textarea",
+        description:
+          "Literal value, or a ${var} reference. Single-placeholder " +
+          "strings (`${nodes.x.output}`) preserve their typed result " +
+          "(arrays / objects keep their shape).",
+        placeholder: "${someVar}  or  literal text",
+      },
       namespace: { type: "string", title: "Namespace", default: "kv" },
     },
   },
@@ -33,8 +44,20 @@ export default {
   },
 
   async execute(input, ctx) {
-    // value=undefined → store JSON null, so the row exists but reads back as null.
-    const value = input.value === undefined ? null : input.value;
+    // Fail loudly instead of silently storing JSON null. The most
+    // common cause of "I stored X and got back null" is the user
+    // typing `${someVar}` where `someVar` doesn't exist — the
+    // expression resolver returns undefined and we'd otherwise persist
+    // a null row. Surfacing the error makes the missing reference
+    // immediately obvious in the InstanceViewer.
+    if (input.value === undefined || input.value === null) {
+      throw new Error(
+        `memory.set: value is empty for key "${input.key}". ` +
+        "If you used a `${var}` reference, make sure the variable " +
+        "resolves to a non-null value before this node runs.",
+      );
+    }
+    const value = input.value;
     await setKv({
       workspaceId: ctx?.execution?.workspaceId,
       scope:       "workflow",
@@ -43,6 +66,14 @@ export default {
       key:         input.key,
       value,
     });
+    // ctx.memory is a snapshot loaded once per execution by the worker
+    // (see backend/src/worker.js — loadKvForScope). Without writing here,
+    // a downstream `${memory.<key>}` expression would read the stale
+    // pre-run value. Keep the in-memory view in sync with the DB.
+    if (ctx && typeof ctx === "object") {
+      if (!ctx.memory || typeof ctx.memory !== "object") ctx.memory = {};
+      ctx.memory[input.key] = value;
+    }
     return { key: input.key, value };
   },
 };

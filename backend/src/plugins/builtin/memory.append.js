@@ -17,10 +17,20 @@ export default {
 
   inputSchema: {
     type: "object",
-    required: ["key"],
+    required: ["key", "item"],
     properties: {
-      key:       { type: "string", title: "Key", minLength: 1 },
-      item:      { title: "Item",      placeholder: "${event}" },
+      key:  { type: "string", title: "Key", minLength: 1 },
+      // No `type` — `item` can be any shape (the typical use is to
+      // append an upstream object via `${nodes.x.output}`). The panel
+      // renders it as a textarea because of the `format` hint.
+      item: {
+        title: "Item",
+        format: "textarea",
+        description:
+          "Item to append. A `${var}` reference preserves the typed " +
+          "value from the referenced node.",
+        placeholder: "${event}",
+      },
       namespace: { type: "string", title: "Namespace", default: "kv" },
     },
   },
@@ -36,14 +46,29 @@ export default {
   },
 
   async execute(input, ctx) {
+    if (input.item === undefined || input.item === null) {
+      throw new Error(
+        `memory.append: item is empty for key "${input.key}". ` +
+        "If you used a `${var}` reference, make sure the variable " +
+        "resolves to a non-null value before this node runs.",
+      );
+    }
     const length = await appendKv({
       workspaceId: ctx?.execution?.workspaceId,
       scope:       "workflow",
       scopeId:     ctx?.execution?.graphId || null,
       namespace:   input.namespace || "kv",
       key:         input.key,
-      item:        input.item ?? null,
+      item:        input.item,
     });
+    // Mirror the new array onto ctx.memory so downstream
+    // ${memory.<key>} sees the latest list (the worker snapshot
+    // would otherwise be stale for the rest of this run).
+    if (ctx && typeof ctx === "object") {
+      if (!ctx.memory || typeof ctx.memory !== "object") ctx.memory = {};
+      const cur = Array.isArray(ctx.memory[input.key]) ? ctx.memory[input.key] : [];
+      ctx.memory[input.key] = [...cur, input.item ?? null];
+    }
     return { key: input.key, length };
   },
 };

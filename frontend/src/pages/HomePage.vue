@@ -27,7 +27,9 @@
   <q-layout view="hHh lpR fFf">
     <q-header class="app-header">
       <q-toolbar class="app-toolbar">
-        <q-img src="/dag_logo_trans.png" style="width: 28px; height: 28px;" class="q-mr-sm" />
+        <q-img 
+         :src="$q.dark.isActive ? '/dag_logo_dark.png' : '/dag_logo_light.png'"
+          style="width: 28px; height: 28px;" class="q-mr-sm" />
         <q-toolbar-title>DAISY Workflow Engine</q-toolbar-title>
       </q-toolbar>
     </q-header>
@@ -77,16 +79,26 @@
           @delete-selected="onDeleteSelectedWorkflows"
         />
 
-        <!-- Triggers ───────────────────────────────────────────────── -->
-        <AppTable
+        <!-- Triggers ───────────────────────────────────────────────────
+             Unified view: lists every trigger (running or stopped) and
+             exposes per-row Run / Start / Stop / Edit / Delete inline.
+             Replaces the old split between "Triggers" + "Running
+             triggers" — operators can flip subscription state without
+             leaving the page. -->
+        <TriggersTable
           v-else-if="activeKey === 'triggers'"
           :rows="trigger_rows"
           :columns="trigger_columns"
           title="Triggers"
+          :role="auth.user?.role || 'viewer'"
+          :busy-row="triggerBusy"
           @add="onAddTrigger"
           @edit="onEditTrigger"
           @delete="onDeleteTrigger"
-          @delete-selected="onDeleteSelectedTriggers"
+          @refresh="reload"
+          @run="fireTrigger"
+          @start="startTrigger"
+          @stop="stopTrigger"
         />
 
         <!-- Agents ─────────────────────────────────────────────────── -->
@@ -123,30 +135,24 @@
           title="Instances"
           :read-only="true"
           @edit="onOpenInstance"
+          @refresh="reload"
         />
 
-        <!-- Running triggers — enabled triggers with no last_error ─── -->
-        <AppTable
-          v-else-if="activeKey === 'running'"
-          :rows="running_rows"
-          :columns="trigger_columns"
-          title="Running triggers"
-          :read-only="true"
-          @edit="onEditTrigger"
-        />
+        <PluginsPage v-else-if="activeKey === 'plugin'"/>
       </q-page>
     </q-page-container>
   </q-layout>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useQuasar } from "quasar";
 import { Graphs, Triggers, Configs, Agents, Executions } from "../api/client";
 import { auth } from "../stores/auth.js";
 import AppTable from "../components/AppTable.vue";
-
+import TriggersTable from "../components/TriggersTable.vue";
+import PluginsPage from "./PluginsPage.vue"
 const router = useRouter();
 const route  = useRoute();
 const $q     = useQuasar();
@@ -177,8 +183,11 @@ const sections = [
   { key: "instances", icon: "monitor",          label: "Instances",
     tooltip: "Instances",         subtitle: "Live and historical workflow executions.",
     roles: ["admin", "editor", "viewer"] },
-  { key: "running",   icon: "play_circle",      label: "Running triggers",
-    tooltip: "Running triggers",  subtitle: "Triggers currently subscribed and listening for events.",
+  // "Running triggers" merged into the Triggers view — that table
+  // now exposes Run / Start / Stop per row, so a separate tab is
+  // no longer needed.
+    { key: "plugin",   icon: "add_business",      label: "",
+    tooltip: "Plugins",  subtitle: "",
     roles: ["admin", "editor"] },
 ];
 
@@ -228,9 +237,9 @@ const config_rows  = ref([]);
 const agent_rows   = ref([]);
 const exec_rows    = ref([]);
 
-const running_rows = computed(() =>
-  trigger_rows.value.filter(t => t.enabled && !t.last_error),
-);
+// `running_rows` used to power a separate sidebar tab. The Triggers
+// view now subsumes that — its inline Start/Stop buttons + status
+// pill replace the need to filter triggers down to running ones.
 
 // ──────────────────────────────────────────────────────────────────────
 // Columns (same shapes as the legacy HomePage so AppTable behaves
@@ -273,7 +282,10 @@ const trigger_columns = [
     format: v => v || "—",
     style: "width: 180px",
   },
-  { name: "actions", label: "", align: "right", style: "width: 80px;" },
+  // Holds Run, Start/Stop, Edit, Delete inline (rendered by
+  // TriggersTable's body-cell-actions slot). Edit + Delete only
+  // appear for admin / editor, so the column collapses for viewers.
+  { name: "actions", label: "", align: "right", style: "width: 168px;" },
 ];
 
 const config_columns = [
@@ -403,14 +415,54 @@ async function onDeleteTrigger(row) {
   try { await Triggers.remove(row.id); notify(`Deleted "${row.name}"`, "positive"); await reload(); }
   catch (e) { notify(`Delete failed: ${errMsg(e)}`, "negative"); }
 }
-async function onDeleteSelectedTriggers(rows) {
-  if (!rows?.length) return;
-  if (!await confirm(`Delete ${rows.length} trigger(s)?`)) return;
-  let failed = 0;
-  for (const r of rows) { try { await Triggers.remove(r.id); } catch { failed++; } }
-  notify(failed ? `Deleted ${rows.length - failed} of ${rows.length} (${failed} failed)`
-                : `Deleted ${rows.length} trigger(s)`, failed ? "warning" : "positive");
-  await reload();
+// Bulk-delete on triggers was dropped when the dedicated "Running
+// triggers" tab was merged in — TriggersTable now exposes inline
+// per-row Run / Start / Stop / Edit / Delete, no checkbox column.
+
+// Per-row busy flag for Run / Start / Stop buttons on the Triggers table.
+// Same pattern as FlowInspector: prevents double-clicks while the API call
+// is in flight.
+const triggerBusy = reactive({});
+
+async function fireTrigger(row) {
+  if (triggerBusy[row.id]) return;
+  triggerBusy[row.id] = true;
+  try {
+    const { executionId } = await Triggers.fire(row.id);
+    notify(`Fired "${row.name}"`, "positive");
+    await reload();
+    if (executionId) router.push(`/instanceViewer/${executionId}`);
+  } catch (e) {
+    notify(`Run failed: ${errMsg(e)}`, "negative");
+  } finally {
+    triggerBusy[row.id] = false;
+  }
+}
+async function stopTrigger(row) {
+  if (triggerBusy[row.id]) return;
+  triggerBusy[row.id] = true;
+  try {
+    await Triggers.update(row.id, { enabled: false });
+    notify(`Stopped "${row.name}"`, "positive");
+    await reload();
+  } catch (e) {
+    notify(`Stop failed: ${errMsg(e)}`, "negative");
+  } finally {
+    triggerBusy[row.id] = false;
+  }
+}
+async function startTrigger(row) {
+  if (triggerBusy[row.id]) return;
+  triggerBusy[row.id] = true;
+  try {
+    await Triggers.update(row.id, { enabled: true });
+    notify(`Started "${row.name}"`, "positive");
+    await reload();
+  } catch (e) {
+    notify(`Start failed: ${errMsg(e)}`, "negative");
+  } finally {
+    triggerBusy[row.id] = false;
+  }
 }
 
 function onAddAgent()        { router.push({ path: "/agentDesigner/new" }); }

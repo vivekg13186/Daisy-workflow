@@ -15,7 +15,7 @@ import { Router } from "express";
 import { v4 as uuid } from "uuid";
 import { pool } from "../db/pool.js";
 import { triggerRegistry } from "../triggers/registry.js";
-import { syncTrigger, activeCount } from "../triggers/manager.js";
+import { syncTrigger, activeCount, fireTriggerById } from "../triggers/manager.js";
 import { ValidationError, NotFoundError } from "../utils/errors.js";
 import { requireUser, requireRole } from "../middleware/auth.js";
 import { auditLog } from "../audit/log.js";
@@ -127,6 +127,30 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res, next) => {
     });
     res.json({ id: req.params.id, updated: true });
   } catch (e) { next(e); }
+});
+
+// Run-now: insert an execution row + enqueue, bypassing the live
+// subscription. The trigger doesn't need to be enabled — useful for
+// "test this trigger" and "manually replay" flows. Body may carry a
+// custom `payload` object that becomes the execution's inputs.
+router.post("/:id/fire", requireRole("admin", "editor"), async (req, res, next) => {
+  try {
+    const payload = req.body?.payload && typeof req.body.payload === "object"
+      ? req.body.payload
+      : {};
+    const result = await fireTriggerById(req.params.id, {
+      payload, workspaceId: req.user.workspaceId,
+    });
+    await auditLog({
+      req, action: "trigger.fire",
+      resource: { type: "trigger", id: req.params.id },
+      metadata: { executionId: result.executionId },
+    });
+    res.status(202).json(result);
+  } catch (e) {
+    if (/not found/.test(e?.message || "")) return next(new NotFoundError("trigger"));
+    next(e);
+  }
 });
 
 router.delete("/:id", requireRole("admin", "editor"), async (req, res, next) => {

@@ -8,6 +8,20 @@
         </template>
       </q-input>
 
+      <!-- Refresh — emits a `refresh` event for the parent to re-fetch.
+           Available in both read-only and editable modes since reloading
+           a list never mutates anything. Parent enables it by listening
+           to @refresh; if no listener is attached the button is hidden
+           to keep older tables tidy. -->
+      <q-btn
+        v-if="hasRefreshListener"
+        icon="refresh" flat dense size="sm"
+        :loading="refreshing"
+        @click="onRefresh"
+      >
+        <q-tooltip>Refresh</q-tooltip>
+      </q-btn>
+
       <!-- Mutating buttons disappear entirely in read-only mode (editor
            view, Instances, Running triggers). Quasar's q-table still
            shows the title + search even without these. -->
@@ -89,9 +103,14 @@
     </template>
    
 
-    <!-- Actions Column — hidden in read-only mode. -->
+    <!-- Actions Column — read-only tables still get the `row-actions`
+         slot, so callers (e.g. HomePage "Running triggers") can drop
+         in Run / Stop buttons that don't fit the Edit/Delete menu.
+         The slot receives `{ row }` and renders to the left of the
+         more_vert menu. -->
     <template v-slot:body-cell-actions="props">
       <q-td :props="props" auto-width>
+        <slot name="row-actions" :row="props.row" />
         <q-btn v-if="!readOnly" icon="more_vert" flat size="sm" dense>
           <q-tooltip>Row actions</q-tooltip>
           <q-menu>
@@ -117,10 +136,19 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, getCurrentInstance } from "vue";
 import { useQuasar } from "quasar";
 
 const $q = useQuasar();
+const instance = getCurrentInstance();
+
+// Whether the parent attached an @refresh handler. The button is
+// hidden when nobody's listening — keeps older callers untouched and
+// avoids a button that does nothing visible.
+const hasRefreshListener = computed(() => {
+  const vnode = instance?.vnode;
+  return !!(vnode?.props?.onRefresh);
+});
 
 const props = defineProps({
   rows: {
@@ -159,10 +187,25 @@ const emit = defineEmits([
   "delete",
   "delete-selected",
   "selection-change",
+  // Fires when the user clicks the refresh icon. Parent should
+  // re-fetch its rows; the button shows a spinner until the parent
+  // either resets the busy prop or the next render flushes.
+  "refresh",
 ]);
 
 const selected = ref([]);
 const filter = ref("");
+const refreshing = ref(false);
+
+function onRefresh() {
+  if (refreshing.value) return;
+  refreshing.value = true;
+  // Vue 3 emit doesn't return a Promise, so we can't await the
+  // parent's reload here. A short fixed delay gives the user
+  // visible feedback that the click registered.
+  emit("refresh");
+  setTimeout(() => { refreshing.value = false; }, 400);
+}
 
 const filteredRows = computed(() => {
   if (!filter.value) return props.rows;

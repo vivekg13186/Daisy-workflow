@@ -68,7 +68,65 @@
   --q-negative:    var(--danger);
   --q-warning:     var(--warning);
   --q-info:        var(--info);
+
+  color-scheme: light;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Dark theme. Activated by setting data-theme="dark" on <html>.
+ * Toggle lives in components/UserMenu.vue → ThemeStore; the choice is
+ * persisted in localStorage and re-applied on page load.
+ * Same token names, dark palette — pages don't need to know the theme
+ * exists as long as they use var(--…) instead of literal colours.
+ * ──────────────────────────────────────────────────────────────────────── */
+html[data-theme="dark"] {
+  --bg:           #0f172a;
+  --surface:      #1e293b;
+  --surface-2:    #15213a;
+
+  --border:       #334155;
+  --border-strong:#475569;
+
+  --text:         #e2e8f0;
+  --text-muted:   #94a3b8;
+  --text-soft:    #64748b;
+
+  --primary:      #6aa1ff;
+  --primary-soft: #1e3a8a;
+  --success:      #4ade80;
+  --success-soft: #14532d;
+  --warning:      #fbbf24;
+  --warning-soft: #78350f;
+  --danger:       #f87171;
+  --danger-soft:  #7f1d1d;
+  --info:         #38bdf8;
+  --info-soft:    #075985;
+
+  --shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow:       0 1px 3px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.35);
+
+  color-scheme: dark;
+}
+html[data-theme="dark"] .q-page { background-color: var(--bg) !important; }
+html[data-theme="dark"] .q-table__top,
+html[data-theme="dark"] .q-table thead tr,
+html[data-theme="dark"] .q-table tbody tr {
+  background: var(--surface) !important;
+  color: var(--text);
+}
+html[data-theme="dark"] .q-table tbody tr:hover { background: var(--surface-2) !important; }
+html[data-theme="dark"] .q-card,
+html[data-theme="dark"] .q-menu,
+html[data-theme="dark"] .q-item {
+  background: var(--surface) !important;
+  color: var(--text);
+}
+html[data-theme="dark"] .q-field__control,
+html[data-theme="dark"] .q-field__native,
+html[data-theme="dark"] .q-field__input {
+  color: var(--text) !important;
+}
+html[data-theme="dark"] .q-field--outlined .q-field__control:before { border-color: var(--border); }
 
 html, body, #app {
   margin: 0; padding: 0; height: 100%;

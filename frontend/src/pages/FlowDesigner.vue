@@ -2,9 +2,14 @@
     <q-layout view="hHh lpR fFf">
         <q-header class="app-header">
             <q-toolbar class="app-toolbar">
-                  <q-img src="/dag_logo_trans.png" style="width: 28px; height: 28px;" class="q-mr-sm" @click="goBack"/>
-            
-           
+                  <q-btn
+                    flat round dense
+                    icon="arrow_back"
+                    class="btn-toolbar q-mr-sm"
+                    @click="goBack"
+                >
+                    <q-tooltip>Back</q-tooltip>
+                </q-btn>
                 <q-toolbar-title>
                     {{ isNew ? "New flow" : model.name }}
                     <span v-if="dirty" class="q-ml-xs text-caption" style="color: var(--warning);">●</span>

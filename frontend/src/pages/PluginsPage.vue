@@ -455,7 +455,7 @@
               />
             </q-tabs>
             <q-separator />
-            <q-tab-panels v-model="agentFileTab" animated class="bg-grey-1">
+            <q-tab-panels v-model="agentFileTab" animated class="agent-panels">
               <q-tab-panel name="__deploy__" class="q-pa-md">
                 <div class="markdown-body" v-html="renderedDeploy"></div>
               </q-tab-panel>
@@ -465,7 +465,7 @@
                 :name="`${i}`"
                 class="q-pa-none"
               >
-                <div class="row items-center q-pa-sm bg-grey-2">
+                <div class="row items-center q-pa-sm agent-file-header">
                   <code class="text-caption">{{ f.path }}</code>
                   <q-space />
                   <q-btn
@@ -948,28 +948,47 @@ function notifyError(e, fallback) {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
+/* Theme-aware surfaces. We use the design-system tokens (defined in
+   src/styles.css) instead of literal colours so the dialog recolours
+   correctly under html[data-theme="dark"]. The previous hex values
+   (#fafafa / #eef / #e6e6e6) and Quasar's bg-grey-1 / bg-grey-2
+   classes were baked to the light palette and showed as bright white
+   slabs inside dark-themed pages. */
+.agent-panels {
+  background: var(--surface-2) !important;
+  color: var(--text);
+}
+.agent-file-header {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
 .agent-file {
   margin: 0;
   padding: 12px 16px;
   max-height: 50vh;
   overflow: auto;
-  background: #fafafa;
+  background: var(--surface-2);
+  color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   white-space: pre;
 }
+.markdown-body { color: var(--text); }
 .markdown-body :deep(h1),
 .markdown-body :deep(h2),
-.markdown-body :deep(h3) { margin-top: 1em; }
+.markdown-body :deep(h3) { margin-top: 1em; color: var(--text); }
 .markdown-body :deep(code) {
-  background: #eef;
+  background: var(--primary-soft);
+  color: var(--text);
   padding: 0 4px;
   border-radius: 3px;
   font-size: 0.92em;
 }
 .markdown-body :deep(pre) {
-  background: #fafafa;
-  border: 1px solid #e6e6e6;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 10px 12px;
   overflow-x: auto;
