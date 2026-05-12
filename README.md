@@ -1,5 +1,3 @@
 Daisy is a workflow automation platform built around a visual editor and a typed DSL. The runtime executes directed acyclic graphs (DAGs) of plugin actions, supports parallel execution with retries and batch fan-out, evaluates FEEL expressions in user-supplied placeholders, and protects credentials with KMS envelope encryption. The platform exposes both in-process and HTTP-transport plugins, supports OIDC authentication, and emits audit, observability, and rate-limit signals suitable for production deployments.
 
-This wiki documents the platform as it ships today. The sidebar organizes pages by audience: introductory material, developer references, the plugin and trigger catalog, and operations.
-
 See the [Wiki](https://github.com/vivekg13186/Daisy-workflow/wiki) for full documentation.
