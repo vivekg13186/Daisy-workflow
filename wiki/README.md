@@ -5,7 +5,7 @@ parallel execution, retries, batch fan-out, FEEL expressions, KMS
 envelope encryption, OIDC, audit logging, AI-assisted authoring, and
 out-of-process plugins.
 
-This wiki is grouped by **who's reading**, not by feature.
+ 
 
 ---
 
@@ -13,8 +13,6 @@ This wiki is grouped by **who's reading**, not by feature.
 
 | Page                                              | What it covers |
 |---------------------------------------------------|----------------|
-| [Philosophy](./00-philosophy.md)                  | The five principles the codebase actually follows. Read first. |
-| [Design choices](./00-design-choices.md)          | Why JSON DSL, why FEEL, why Postgres, why BullMQ, why split plugins. Concrete trade-offs. |
 | [Getting started (developers)](./00-getting-started.md) | Local dev quickstart, code layout, common commands, your first plugin. |
 | [Overview](./01-overview.md)                      | Component diagram, execution algorithm, data model, scaling. |
 
@@ -59,11 +57,11 @@ You're deploying, securing, scaling, or operating it.
 
 ## Quick links
 
-- Sample workflows: [`backend/samples/`](../backend/samples/)
+
 - Backend code: [`backend/src/`](../backend/src/)
 - Frontend code: [`frontend/src/`](../frontend/src/)
 - Plugin SDK: [`plugin-sdk/`](../plugin-sdk/)
-- Example external plugin: [`plugins-external/reddit/`](../plugins-external/reddit/)
+- Example external plugin: [`plugins-external/reddit/`](../plugins-external/devvit.reddit/)
 - Migrations: [`backend/migrations/`](../backend/migrations/)
 - Observability stack: [`observability/`](../observability/)
 

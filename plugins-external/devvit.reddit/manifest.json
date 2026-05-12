@@ -1,0 +1,99 @@
+{
+  "name": "devvit.reddit",
+  "version": "0.1.0",
+  "description": "Reddit integration plugin for submitting posts/comments and fetching post data",
+  "primaryOutput": "result",
+  "configRefs": [
+    {
+      "name": "reddit_client_id",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "reddit_client_secret",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "reddit_username",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "reddit_password",
+      "type": "string",
+      "required": true
+    }
+  ],
+  "inputSchema": {
+    "type": "object",
+    "required": ["action"],
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "submit_post",
+          "submit_comment",
+          "get_posts",
+          "get_post_by_id",
+          "get_posts_by_user_id"
+        ],
+        "description": "The action to perform"
+      },
+      "subreddit": {
+        "type": "string",
+        "description": "Subreddit name (required for submit_post, get_posts)"
+      },
+      "title": {
+        "type": "string",
+        "description": "Post title (required for submit_post)"
+      },
+      "selftext": {
+        "type": "string",
+        "description": "Post body text (optional for submit_post)"
+      },
+      "url": {
+        "type": "string",
+        "description": "Post URL (optional for submit_post)"
+      },
+      "post_id": {
+        "type": "string",
+        "description": "Post ID (required for submit_comment, get_post_by_id)"
+      },
+      "text": {
+        "type": "string",
+        "description": "Comment text (required for submit_comment)"
+      },
+      "user_id": {
+        "type": "string",
+        "description": "Username (required for get_posts_by_user_id)"
+      },
+      "limit": {
+        "type": "integer",
+        "default": 10,
+        "description": "Number of posts to fetch (default 10)"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "type": "boolean",
+        "description": "Whether the operation succeeded"
+      },
+      "result": {
+        "oneOf": [
+          {"type": "object"},
+          {"type": "array"},
+          {"type": "string"}
+        ],
+        "description": "Operation result"
+      },
+      "error": {
+        "type": "string",
+        "description": "Error message if operation failed"
+      }
+    }
+  }
+}
