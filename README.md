@@ -1,6 +1,6 @@
-# Daisy-DAG — Wiki
+# Daisy  — Wiki
 
-A JSON-defined DAG workflow engine. Visual editor, pluggable actions,
+A low code workflow automation application. Visual editor, pluggable actions,
 parallel execution, retries, batch fan-out, FEEL expressions, KMS
 envelope encryption, OIDC, audit logging, AI-assisted authoring, and
 out-of-process plugins.

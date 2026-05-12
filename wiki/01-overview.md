@@ -7,7 +7,7 @@ algorithm, the plugin contract, the data model, and how it scales.
 
 ## At a glance
 
-Daisy-DAG is a JSON-defined DAG workflow runner with:
+Daisy-DAG is a low code  workflow runner with:
 
 - A drag-and-drop **visual editor** (Vue 3 + Quasar + Vue Flow).
 - A **stateless API** (Express) and **stateless worker** (BullMQ).
