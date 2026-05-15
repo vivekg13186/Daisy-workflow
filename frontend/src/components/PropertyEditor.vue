@@ -65,55 +65,60 @@
         <template v-for="item in panel.children" :key="item.bind">
 
           <!-- INPUT (text / number / url / email / password) -->
-          <q-input
-            v-if="item.ui_type === 'input'"
-            outlined dense
-            :model-value="get(item.bind)"
-            @update:model-value="set(item.bind, coerce(item, $event))"
-            :label="item.label"
-            :type="item.type || 'text'"
-            :hint="item.hint"
-            :rules="buildRules(item.validation, item)"
-            lazy-rules
-          />
+          <div v-if="item.ui_type === 'input'">
+            <q-input
+              outlined dense
+              :model-value="get(item.bind)"
+              @update:model-value="set(item.bind, coerce(item, $event))"
+              :label="item.label"
+              :type="item.type || 'text'"
+              :rules="buildRules(item.validation, item)"
+              lazy-rules
+            />
+            <div v-if="item.hint" class="prop-hint">{{ item.hint }}</div>
+          </div>
 
           <!-- TEXTAREA -->
-          <q-input
-            v-else-if="item.ui_type === 'textarea'"
-            outlined dense type="textarea" autogrow
-            :model-value="get(item.bind)"
-            @update:model-value="set(item.bind, $event)"
-            :label="item.label"
-            :hint="item.hint"
-            :placeholder="item.placeholder"
-            :rules="buildRules(item.validation, item)"
-            lazy-rules
-            input-style="font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; min-height: 60px; white-space: pre;"
-          />
+          <div v-else-if="item.ui_type === 'textarea'">
+            <q-input
+              outlined dense type="textarea" autogrow
+              :model-value="get(item.bind)"
+              @update:model-value="set(item.bind, $event)"
+              :label="item.label"
+              :placeholder="item.placeholder"
+              :rules="buildRules(item.validation, item)"
+              lazy-rules
+              input-style="font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; min-height: 60px; white-space: pre;"
+            />
+            <div v-if="item.hint" class="prop-hint">{{ item.hint }}</div>
+          </div>
 
           <!-- SELECT -->
-          <q-select
-            v-else-if="item.ui_type === 'select'"
-            outlined dense emit-value map-options
-            :model-value="get(item.bind)"
-            @update:model-value="set(item.bind, $event)"
-            :options="normalizeOptions(item.options)"
-            :label="item.label"
-            :hint="item.hint"
-            :rules="buildRules(item.validation, item)"
-            lazy-rules
-          />
+          <div v-else-if="item.ui_type === 'select'">
+            <q-select
+              outlined dense emit-value map-options
+              :model-value="get(item.bind)"
+              @update:model-value="set(item.bind, $event)"
+              :options="normalizeOptions(item.options)"
+              :label="item.label"
+              :rules="buildRules(item.validation, item)"
+              lazy-rules
+            />
+            <div v-if="item.hint" class="prop-hint">{{ item.hint }}</div>
+          </div>
 
           <!-- TOGGLE (boolean) -->
-          <q-toggle
-            v-else-if="item.ui_type === 'toggle'"
-            :model-value="!!get(item.bind)"
-            @update:model-value="set(item.bind, $event)"
-            :label="item.label"
-            color="primary"
-            left-label
-            dense
-          />
+          <div v-else-if="item.ui_type === 'toggle'">
+            <q-toggle
+              :model-value="!!get(item.bind)"
+              @update:model-value="set(item.bind, $event)"
+              :label="item.label"
+              color="primary"
+              left-label
+              dense
+            />
+            <div v-if="item.hint" class="prop-hint">{{ item.hint }}</div>
+          </div>
 
           <!-- LIST (array of strings) -->
           <div v-else-if="item.ui_type === 'list'">
@@ -506,6 +511,22 @@ defineExpose({
 }
 .property-editor :deep(.q-field__label) { font-size: 11.5px; }
 .property-editor :deep(.q-field__native) { font-size: 12px; }
+
+/* External hint rendered as a sibling below the field.
+   Quasar's built-in `hint` prop puts the text in an absolutely-
+   positioned `q-field__bottom` with a fixed reservation slot (~18px in
+   dense mode). Any hint over ~2 lines either clips or visually
+   collides with the next field. Rendering the hint as a plain sibling
+   div instead keeps it in normal flow — wraps as far as it needs and
+   pushes the next field down naturally. */
+.prop-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  padding: 2px 2px 0;
+  white-space: normal;
+  word-break: break-word;
+}
 
 .property-table :deep(thead th) {
   background: var(--surface-2);
