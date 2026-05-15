@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Daisy-DAG Postgres backup script.
+# Daisy-workflow Postgres backup script.
 #
 # Produces a custom-format pg_dump file, optionally gzipped, optionally
 # uploaded to S3, and optionally encrypted with gpg before upload.

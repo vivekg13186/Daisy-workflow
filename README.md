@@ -24,8 +24,8 @@ cd Daisy-workflow
 Pull and start everything:
 
 ```bash
-BACKEND_IMAGE=vivek13186/daisy-dag-backend:latest \
-FRONTEND_IMAGE=vivek13186/daisy-dag-frontend:latest \
+BACKEND_IMAGE=vivek13186/daisy-workflow-backend:latest \
+FRONTEND_IMAGE=vivek13186/daisy-workflow-frontend:latest \
   docker compose --profile full up -d
 ```
 
@@ -35,16 +35,16 @@ Compose brings up four containers:
 |----------------|---------------------------------------------|-----------|
 | `dag_postgres` | `postgres:16-alpine`                        | 5432      |
 | `dag_redis`    | `redis:7-alpine`                            | 6379      |
-| `dag_backend`  | `vivek13186/daisy-dag-backend:latest`       | 3000      |
-| `dag_frontend` | `vivek13186/daisy-dag-frontend:latest`      | 5173      |
+| `dag_backend`  | `vivek13186/daisy-workflow-backend:latest`       | 3000      |
+| `dag_frontend` | `vivek13186/daisy-workflow-frontend:latest`      | 5173      |
 
 The backend waits for Postgres + Redis to report healthy before starting. First boot takes ~20 seconds.
 
 For the **dev** images (watch mode, debugger port exposed, looser logging) swap the tag:
 
 ```bash
-BACKEND_IMAGE=vivek13186/daisy-dag-backend:dev \
-FRONTEND_IMAGE=vivek13186/daisy-dag-frontend:dev \
+BACKEND_IMAGE=vivek13186/daisy-workflow-backend:dev \
+FRONTEND_IMAGE=vivek13186/daisy-workflow-frontend:dev \
   docker compose --profile full up -d
 ```
 
@@ -112,8 +112,8 @@ docker compose restart backend
 
 # Pull newer images and recreate
 docker compose pull
-BACKEND_IMAGE=vivek13186/daisy-dag-backend:latest \
-FRONTEND_IMAGE=vivek13186/daisy-dag-frontend:latest \
+BACKEND_IMAGE=vivek13186/daisy-workflow-backend:latest \
+FRONTEND_IMAGE=vivek13186/daisy-workflow-frontend:latest \
   docker compose --profile full up -d
 
 # Shut everything down (volumes preserved)

@@ -1,4 +1,4 @@
-# Publish Daisy-DAG images to Docker Hub.
+# Publish Daisy-workflow images to Docker Hub.
 #
 # Fires on:
 #   • push to main          → builds prod images, tags as `edge` + `sha-<short>`
@@ -53,7 +53,7 @@ jobs:
       - name: Compute build metadata
         id: meta
         run: |
-          IMG="${{ secrets.DOCKERHUB_USER }}/daisy-dag-${{ matrix.service }}"
+          IMG="${{ secrets.DOCKERHUB_USER }}/daisy-workflow-${{ matrix.service }}"
           SHA="${GITHUB_SHA::7}"
 
           if [[ "${{ github.ref_type }}" == "tag" ]]; then

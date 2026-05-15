@@ -99,8 +99,16 @@
                 Trigger <code>{{ m.triggerCreated.name }}</code> ({{ m.triggerCreated.type }})
                 created and enabled.
               </div>
+              <div v-if="m.agentCreated" class="applied-banner q-mt-sm">
+                <q-icon name="psychology" size="14px" class="q-mr-xs" />
+                Agent <code>{{ m.agentCreated.title }}</code> created — reference it from a node with
+                <code>agent: "{{ m.agentCreated.title }}"</code>.
+              </div>
             </div>
-            <div v-else>{{ m.content }}</div>
+            <!-- User bubble. Render through marked too so pasted
+                 markdown (lists, code fences) renders rather than
+                 showing as literal characters. -->
+            <div v-else class="msg-text" v-html="renderMarkdown(m.content)"></div>
           </q-chat-message>
         </template>
 
@@ -248,6 +256,7 @@ async function sendMessage() {
       traces:         res.traces || [],
       proposedGraph:  res.proposedGraph || null,
       triggerCreated: res.triggerCreated || null,
+      agentCreated:   res.agentCreated   || null,
     };
     messages.value = [...messages.value, asstMsg];
 
@@ -390,13 +399,61 @@ function formatTraceTitle(t) {
   background: var(--surface);
   color: var(--text);
 }
+/* User-sent bubble. Previously used var(--primary) which read as a
+   heavy dark-blue block against the surface; we want a softer
+   white-on-bordered card. Mirrors the OrchestratorChat dialog. */
 .chat-bubble :deep(.q-message-sent .q-message-text) {
-  background: var(--primary);
-  color: white;
+  background: #ffffff;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+html[data-theme="dark"] .chat-bubble :deep(.q-message-sent .q-message-text) {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+/* Assistant bubble in dark mode. The default `.q-message-text` color from
+   Quasar leaks through and reads as dark-on-dark; pin it explicitly. */
+html[data-theme="dark"] .chat-bubble :deep(.q-message-received .q-message-text) {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+}
+html[data-theme="dark"] .chat-bubble :deep(.q-message-received .q-message-text-content) {
+  color: #e2e8f0;
 }
 .assistant-bubble {
   line-height: 1.45;
 }
+/* Compress markdown headings — browser defaults (2em, 1.5em…) are
+   wildly oversized inside a chat bubble. Keep the visual hierarchy
+   but at chat-friendly font sizes. */
+.msg-text :deep(h1),
+.msg-text :deep(h2),
+.msg-text :deep(h3),
+.msg-text :deep(h4),
+.msg-text :deep(h5),
+.msg-text :deep(h6) {
+  margin: 10px 0 4px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.msg-text :deep(h1) { font-size: 1.05rem; }
+.msg-text :deep(h2) { font-size: 1rem;    }
+.msg-text :deep(h3) { font-size: 0.95rem; }
+.msg-text :deep(h4),
+.msg-text :deep(h5),
+.msg-text :deep(h6) { font-size: 0.9rem;  }
+.msg-text :deep(h1:first-child),
+.msg-text :deep(h2:first-child),
+.msg-text :deep(h3:first-child),
+.msg-text :deep(h4:first-child),
+.msg-text :deep(h5:first-child),
+.msg-text :deep(h6:first-child) { margin-top: 0; }
+.msg-text :deep(p) { margin: 0 0 8px; }
+.msg-text :deep(p:last-child) { margin-bottom: 0; }
+.msg-text :deep(ul),
+.msg-text :deep(ol) { margin: 4px 0 8px; padding-left: 20px; }
+.msg-text :deep(li) { margin: 2px 0; }
 .msg-text :deep(code) {
   background: rgba(0,0,0,0.06);
   padding: 1px 5px;

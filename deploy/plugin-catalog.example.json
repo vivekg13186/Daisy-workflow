@@ -1,5 +1,5 @@
 {
-  "name":    "Daisy-DAG Official",
+  "name":    "Daisy-workflow Official",
   "version": "1",
   "description": "Local-disk fallback catalog. Used by the marketplace browser in the Plugins admin page when PLUGIN_CATALOG_URL is not set. Mirror the schema below in any remote catalog you publish.",
 
@@ -10,15 +10,15 @@
       "summary":         "Search public Reddit posts via the official JSON API.",
       "category":        "social",
       "tags":            ["reddit", "search", "social"],
-      "homepage":        "https://github.com/daisy-dag/daisy-dag",
+      "homepage":        "https://github.com/vivekg13186/Daisy-workflow",
 
-      "containerImage":  "ghcr.io/daisy-dag/reddit-plugin:0.1.0",
+      "containerImage":  "ghcr.io/vivekg13186/reddit-plugin:0.1.0",
       "containerPort":   8080,
 
-      "manifestUrl":     "https://raw.githubusercontent.com/daisy-dag/daisy-dag/main/plugins-external/reddit/manifest.json",
+      "manifestUrl":     "https://raw.githubusercontent.com/vivekg13186/Daisy-workflow/main/plugins-external/reddit/manifest.json",
       "manifestSha256":  null,
 
-      "catalogEntryUrl": "https://daisy-dag.example.com/catalog#reddit.search@0.1.0"
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#reddit.search@0.1.0"
     }
   ]
 }

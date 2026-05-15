@@ -1,0 +1,42 @@
+{
+  "name":          "jira.issue.search",
+  "version":       "0.1.0",
+  "description":   "Run a JQL search against Jira Cloud. Returns a paginated array of issues. Use field restrictions to keep response sizes manageable on large queries.",
+  "primaryOutput": "issues",
+
+  "configRefs": [
+    {
+      "name":        "jira",
+      "type":        "generic",
+      "required":    true,
+      "description": "Generic config containing host (https://acme.atlassian.net), email, apiToken."
+    }
+  ],
+
+  "inputSchema": {
+    "type": "object",
+    "required": ["jql"],
+    "properties": {
+      "jql":        { "type": "string", "description": "JQL query, e.g. \"project = ACME AND status = 'In Progress' ORDER BY updated DESC\"." },
+      "maxResults": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 },
+      "startAt":    { "type": "integer", "minimum": 0, "default": 0, "description": "Pagination offset." },
+      "fields":     { "type": "array", "items": { "type": "string" }, "description": "Restrict the fields returned, e.g. ['summary','status','assignee']. Omit for all." },
+      "expand":     { "type": "array", "items": { "type": "string" }, "description": "Jira `expand` query." },
+      "config":     { "type": "string", "description": "Workspace config name. Default: 'jira'." },
+      "timeoutMs":  { "type": "integer", "minimum": 1, "maximum": 60000, "default": 20000 }
+    }
+  },
+
+  "outputSchema": {
+    "type": "object",
+    "required": ["ok", "issues", "total"],
+    "properties": {
+      "ok":         { "type": "boolean" },
+      "status":     { "type": "integer" },
+      "issues":     { "type": "array", "description": "Issue objects from this page." },
+      "total":      { "type": "integer", "description": "Total matching issues across all pages." },
+      "startAt":    { "type": "integer" },
+      "maxResults": { "type": "integer" }
+    }
+  }
+}

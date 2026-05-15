@@ -13,7 +13,7 @@
 // Catalog schema (single JSON object):
 //
 //   {
-//     "name":    "Daisy-DAG Official",
+//     "name":    "Daisy-workflow Official",
 //     "version": "1",
 //     "plugins": [
 //       {

@@ -1,0 +1,42 @@
+{
+  "name":          "jira.issue.transition",
+  "version":       "0.1.0",
+  "description":   "Transition a Jira Cloud issue to a new status. Pass either transitionId (fast) or transitionName (the plugin looks up the matching ID from the issue's available transitions).",
+  "primaryOutput": "result",
+
+  "configRefs": [
+    {
+      "name":        "jira",
+      "type":        "generic",
+      "required":    true,
+      "description": "Generic config containing host (https://acme.atlassian.net), email, apiToken."
+    }
+  ],
+
+  "inputSchema": {
+    "type": "object",
+    "required": ["issueKey"],
+    "properties": {
+      "issueKey":       { "type": "string", "description": "Issue key, e.g. ACME-123." },
+      "transitionId":   { "type": "string", "description": "ID of the transition to apply. Takes precedence over transitionName when both are set." },
+      "transitionName": { "type": "string", "description": "Human-readable transition name, e.g. 'Done', 'In Progress'. Case-insensitive lookup." },
+      "comment":        { "type": "string", "description": "Optional comment added with the transition. Wrapped into ADF." },
+      "resolution":     { "type": "string", "description": "Optional resolution name to set when closing, e.g. 'Done', 'Won't Do'." },
+      "config":         { "type": "string", "description": "Workspace config name. Default: 'jira'." },
+      "timeoutMs":      { "type": "integer", "minimum": 1, "maximum": 60000, "default": 15000 }
+    }
+  },
+
+  "outputSchema": {
+    "type": "object",
+    "required": ["ok", "transitionId"],
+    "properties": {
+      "ok":             { "type": "boolean" },
+      "status":         { "type": "integer" },
+      "transitionId":   { "type": "string", "description": "ID of the transition that was applied." },
+      "transitionName": { "type": "string" },
+      "issueKey":       { "type": "string" },
+      "url":            { "type": "string" }
+    }
+  }
+}

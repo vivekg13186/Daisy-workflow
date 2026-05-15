@@ -32,7 +32,7 @@ import { HttpError } from "../../utils/errors.js";
 import { log } from "../../utils/logger.js";
 
 const SYSTEM_PROMPT = `\
-You are a code-generator for plugins of the Daisy-DAG workflow engine.
+You are a code-generator for plugins of the Daisy-workflow engine.
 
 You produce ONLY a single, strict JSON object. No prose before or after, no markdown
 fences. The shape is:

@@ -9,6 +9,12 @@
 #     --profile full \
 #     up -d
 #
+# The Jira family ships under its own profile so you can pull it in
+# without dragging reddit (or anything else later) along:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.plugins.yml \
+#     --profile jira up -d
+#
 # Daisy itself doesn't auto-discover these containers — you have to
 # install each one once via the admin UI (or `npm run install-plugin
 # -- --endpoint http://reddit-plugin:8080`). After that the plugin
@@ -41,11 +47,123 @@ services:
     restart: unless-stopped
     environment:
       PORT: "8080"
-      REDDIT_USER_AGENT: "daisy-dag/0.2 (+plugin reddit.search)"
+      REDDIT_USER_AGENT: "daisy-workflow/0.2 (+plugin reddit.search)"
     # Internal-only by default. Uncomment to expose for browser
     # testing on the host.
     # ports:
     #   - "8081:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── Jira family ────────────────────────────────────────────────────
+  # Six focused plugins. Each one container, all on port 8080 internally
+  # (resolved via their container names in install URLs). After `up -d`,
+  # install each:
+  #
+  #   npm run install-plugin -- --endpoint http://jira-issue-get:8080
+  #   npm run install-plugin -- --endpoint http://jira-issue-create:8080
+  #   npm run install-plugin -- --endpoint http://jira-issue-update:8080
+  #   npm run install-plugin -- --endpoint http://jira-issue-search:8080
+  #   npm run install-plugin -- --endpoint http://jira-issue-comment-add:8080
+  #   npm run install-plugin -- --endpoint http://jira-issue-transition:8080
+  #
+  # Auth: each plugin reads a workspace `generic` config (default name
+  # "jira") with host / email / apiToken. Create one on the
+  # Configurations page in the Daisy UI before running any flows.
+
+  jira-issue-get:
+    profiles: ["jira", "full"]
+    build:
+      context: .
+      dockerfile: plugins-external/jira-issue-get/Dockerfile
+    container_name: jira-issue-get
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  jira-issue-create:
+    profiles: ["jira", "full"]
+    build:
+      context: .
+      dockerfile: plugins-external/jira-issue-create/Dockerfile
+    container_name: jira-issue-create
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  jira-issue-update:
+    profiles: ["jira", "full"]
+    build:
+      context: .
+      dockerfile: plugins-external/jira-issue-update/Dockerfile
+    container_name: jira-issue-update
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  jira-issue-search:
+    profiles: ["jira", "full"]
+    build:
+      context: .
+      dockerfile: plugins-external/jira-issue-search/Dockerfile
+    container_name: jira-issue-search
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  jira-issue-comment-add:
+    profiles: ["jira", "full"]
+    build:
+      context: .
+      dockerfile: plugins-external/jira-issue-comment-add/Dockerfile
+    container_name: jira-issue-comment-add
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  jira-issue-transition:
+    profiles: ["jira", "full"]
+    build:
+      context: .
+      dockerfile: plugins-external/jira-issue-transition/Dockerfile
+    container_name: jira-issue-transition
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 30s

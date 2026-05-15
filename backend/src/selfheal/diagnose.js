@@ -213,7 +213,7 @@ async function gatherContext(exec) {
 // Prompt
 // ────────────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are a workflow-failure diagnostician for the Daisy-DAG workflow engine.
+const SYSTEM_PROMPT = `You are a workflow-failure diagnostician for the Daisy-workflow engine.
 
 Given the context for a failed execution, return a STRICT JSON object with this shape:
 

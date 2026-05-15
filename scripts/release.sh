@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build + push Daisy-DAG images to Docker Hub.
+# Build + push Daisy-workflow images to Docker Hub.
 #
 # Usage:
 #   ./scripts/release.sh                # builds + pushes VERSION=$(cat VERSION)
@@ -61,7 +61,7 @@ done
   exit 1
 }
 
-echo "→ Releasing Daisy-DAG ${VERSION} to ${DOCKERHUB_USER} on Docker Hub"
+echo "→ Releasing Daisy-workflow ${VERSION} to ${DOCKERHUB_USER} on Docker Hub"
 echo "  Platforms: ${PLATFORMS}"
 echo
 
@@ -94,7 +94,7 @@ build_and_push() {
     secondary="dev"
   fi
 
-  local image="${DOCKERHUB_USER}/daisy-dag-${svc}"
+  local image="${DOCKERHUB_USER}/daisy-workflow-${svc}"
   echo "→ Building ${image}:${primary} (${mode})"
   docker buildx build \
     --platform "${PLATFORMS}" \
@@ -113,7 +113,7 @@ for svc in backend frontend; do
 done
 
 echo "✓ Done. Pulled with:"
-echo "    docker pull ${DOCKERHUB_USER}/daisy-dag-backend:${VERSION}"
-echo "    docker pull ${DOCKERHUB_USER}/daisy-dag-frontend:${VERSION}"
-echo "    docker pull ${DOCKERHUB_USER}/daisy-dag-backend:dev"
-echo "    docker pull ${DOCKERHUB_USER}/daisy-dag-frontend:dev"
+echo "    docker pull ${DOCKERHUB_USER}/daisy-workflow-backend:${VERSION}"
+echo "    docker pull ${DOCKERHUB_USER}/daisy-workflow-frontend:${VERSION}"
+echo "    docker pull ${DOCKERHUB_USER}/daisy-workflow-backend:dev"
+echo "    docker pull ${DOCKERHUB_USER}/daisy-workflow-frontend:dev"

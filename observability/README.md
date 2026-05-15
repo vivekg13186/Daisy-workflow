@@ -1,6 +1,6 @@
-# Daisy-DAG Observability Stack
+# Daisy-workflow Observability Stack
 
-Drop-in **Grafana + Tempo** with a starter dashboard for Daisy-DAG.
+Drop-in **Grafana + Tempo** with a starter dashboard for Daisy-workflow.
 Trace pipeline (workflow.run → node.execute → plugin.\<name\> → external
 calls) lands in Tempo; aggregate dashboards (success rate, latency,
 token cost) read straight from the engine's Postgres tables — no
@@ -27,7 +27,7 @@ metrics export needed.
 
    Restart the API and worker.
 
-3. **Run any workflow.** Open Grafana → **Dashboards → Daisy-DAG → Daisy-DAG Overview**.
+3. **Run any workflow.** Open Grafana → **Dashboards → Daisy-workflow → Daisy-workflow Overview**.
 
    You'll see executions per minute, success rate, p50/p95/p99 latency,
    top failing nodes, recent failures (with one-click link into Tempo),

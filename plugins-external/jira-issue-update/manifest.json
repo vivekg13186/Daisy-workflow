@@ -1,0 +1,45 @@
+{
+  "name":          "jira.issue.update",
+  "version":       "0.1.0",
+  "description":   "Update fields on an existing Jira Cloud issue. Only the fields you supply are sent — other fields are left untouched.",
+  "primaryOutput": "issue",
+
+  "configRefs": [
+    {
+      "name":        "jira",
+      "type":        "generic",
+      "required":    true,
+      "description": "Generic config containing host (https://acme.atlassian.net), email, apiToken."
+    }
+  ],
+
+  "inputSchema": {
+    "type": "object",
+    "required": ["issueKey"],
+    "properties": {
+      "issueKey":    { "type": "string", "description": "Issue key, e.g. ACME-123." },
+      "summary":     { "type": "string" },
+      "description": { "type": "string", "description": "Plain text gets wrapped into ADF; pass an ADF object to forward as-is." },
+      "assignee":    { "type": "string", "description": "Assignee accountId. Pass empty string to unassign." },
+      "priority":    { "type": "string", "description": "Priority name." },
+      "labels":      { "type": "array", "items": { "type": "string" } },
+      "components":  { "type": "array", "items": { "type": "string" } },
+      "dueDate":     { "type": "string", "description": "YYYY-MM-DD." },
+      "customFields":{ "type": "object", "description": "Map of customfield_XXXXX → value." },
+      "config":      { "type": "string", "description": "Workspace config name. Default: 'jira'." },
+      "timeoutMs":   { "type": "integer", "minimum": 1, "maximum": 60000, "default": 15000 }
+    }
+  },
+
+  "outputSchema": {
+    "type": "object",
+    "required": ["ok", "issueKey"],
+    "properties": {
+      "ok":       { "type": "boolean" },
+      "status":   { "type": "integer" },
+      "issueKey": { "type": "string" },
+      "url":      { "type": "string" },
+      "issue":    { "description": "Always null — Jira's PUT /issue endpoint returns 204 No Content. Re-fetch with jira.issue.get if you need the updated body." }
+    }
+  }
+}

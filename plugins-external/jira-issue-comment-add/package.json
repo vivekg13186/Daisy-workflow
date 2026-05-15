@@ -1,0 +1,11 @@
+{
+  "name":        "@daisy-workflow/plugin-jira-issue-comment-add",
+  "version":     "0.1.0",
+  "description": "Daisy external plugin — add a comment to a Jira Cloud issue.",
+  "type":        "module",
+  "main":        "index.js",
+  "scripts":     { "start": "node index.js" },
+  "dependencies": { "@daisy-workflow/plugin-sdk": "^0.1.0" },
+  "engines":     { "node": ">=20" },
+  "license":     "MIT"
+}

@@ -527,10 +527,13 @@
 <script setup>
 import { ref, computed, onMounted, watch } from "vue";
 import { useQuasar, copyToClipboard } from "quasar";
+import { useRoute, useRouter } from "vue-router";
 import { marked } from "marked";
 import { Plugins } from "../api/client.js";
 
-const $q = useQuasar();
+const $q     = useQuasar();
+const route  = useRoute();
+const router = useRouter();
 
 // -- Tab state --------------------------------------------------------
 const tab = ref("installed");
@@ -660,6 +663,21 @@ const snippetYaml = computed(() => {
 // -- Lifecycle --------------------------------------------------------
 onMounted(() => {
   load();
+  // Prefill from the centralised Ask Agent's hand-off card.
+  // OrchestratorChat pushes us here with ?askPrompt=...&askTransport=...
+  // when the user asks it to build a new plugin; rather than asking the
+  // user to retype the spec, we open the Ask-Agent dialog with the
+  // prompt pre-loaded so they can review + Generate immediately.
+  // After consuming, strip the query so a page refresh doesn't re-open
+  // the dialog.
+  const ask = route.query?.askPrompt;
+  if (typeof ask === "string" && ask.trim()) {
+    agentPrompt.value = ask;
+    const t = route.query?.askTransport;
+    agentTransport.value = t === "stdio" ? "stdio" : "http";
+    openAgent();
+    router.replace({ path: route.path, query: {} });
+  }
 });
 
 watch(tab, (t) => {

@@ -74,7 +74,7 @@ test("renderPrompt: handles 'no failed-node states' edge case", () => {
 });
 
 test("system prompt names the engine + locks the response shape", () => {
-  assert.match(SYSTEM_PROMPT, /Daisy-DAG/);
+  assert.match(SYSTEM_PROMPT, /Daisy-workflow/);
   assert.match(SYSTEM_PROMPT, /transient/);
   assert.match(SYSTEM_PROMPT, /config/);
   assert.match(SYSTEM_PROMPT, /code/);

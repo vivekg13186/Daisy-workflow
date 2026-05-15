@@ -1,0 +1,46 @@
+{
+  "name":          "jira.issue.comment.add",
+  "version":       "0.1.0",
+  "description":   "Add a comment to a Jira Cloud issue. Plain-text comments are wrapped in Atlassian Document Format automatically.",
+  "primaryOutput": "comment",
+
+  "configRefs": [
+    {
+      "name":        "jira",
+      "type":        "generic",
+      "required":    true,
+      "description": "Generic config containing host (https://acme.atlassian.net), email, apiToken."
+    }
+  ],
+
+  "inputSchema": {
+    "type": "object",
+    "required": ["issueKey", "comment"],
+    "properties": {
+      "issueKey":  { "type": "string", "description": "Issue key, e.g. ACME-123." },
+      "comment":   { "type": "string", "description": "Comment body. Plain text gets wrapped into ADF." },
+      "visibility":{
+        "type": "object",
+        "description": "Optional visibility restriction, e.g. { type: 'role', value: 'Administrators' }.",
+        "properties": {
+          "type":  { "type": "string", "enum": ["group", "role"] },
+          "value": { "type": "string" }
+        },
+        "required": ["type", "value"]
+      },
+      "config":    { "type": "string", "description": "Workspace config name. Default: 'jira'." },
+      "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 60000, "default": 15000 }
+    }
+  },
+
+  "outputSchema": {
+    "type": "object",
+    "required": ["ok", "comment"],
+    "properties": {
+      "ok":      { "type": "boolean" },
+      "status":  { "type": "integer" },
+      "comment": { "type": "object", "description": "Jira's comment object (id, author, created, body, etc.)." },
+      "url":     { "type": "string" }
+    }
+  }
+}

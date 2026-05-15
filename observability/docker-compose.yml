@@ -1,4 +1,4 @@
-# Observability stack for Daisy-DAG.
+# Observability stack for Daisy-workflow.
 #
 # Grafana (UI) + Tempo (trace storage). Postgres is reached over
 # host.docker.internal so Grafana can also query the engine's executions

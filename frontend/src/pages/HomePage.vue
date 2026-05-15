@@ -27,12 +27,29 @@
   <q-layout view="hHh lpR fFf">
     <q-header class="app-header">
       <q-toolbar class="app-toolbar">
-        <q-img 
+        <q-img
          :src="$q.dark.isActive ? '/dag_logo_dark.png' : '/dag_logo_light.png'"
           style="width: 28px; height: 28px;" class="q-mr-sm" />
         <q-toolbar-title>DAISY Workflow Engine</q-toolbar-title>
+        <q-space />
+        <!-- Centralised Ask Agent button. Opens a full-screen chat
+             that can produce workflows, agents, and plugins from one
+             conversation. Replaces the per-page "Ask AI" entry points
+             over time (Prompt tab on the editor, Ask Agent on the
+             Plugins page) — both will eventually re-launch this. -->
+        <q-btn
+          flat dense no-caps
+          icon="auto_awesome"
+          label="Ask Agent"
+          class="ask-agent-btn"
+          @click="orchestratorOpen = true"
+        >
+          <q-tooltip>Describe what you want — workflows, agents, or plugins</q-tooltip>
+        </q-btn>
       </q-toolbar>
     </q-header>
+
+    <OrchestratorChat v-model="orchestratorOpen" @saved="onOrchestratorSaved" />
 
     <!-- Activity bar — fixed-width vertical rail of icons -->
     <q-drawer
@@ -157,6 +174,7 @@ import { Graphs, Triggers, Configs, Agents, Executions } from "../api/client";
 import { auth } from "../stores/auth.js";
 import AppTable from "../components/AppTable.vue";
 import TriggersTable from "../components/TriggersTable.vue";
+import OrchestratorChat from "../components/OrchestratorChat.vue";
 import PluginsPage from "./PluginsPage.vue"
 // File picker + download helpers — same utilities the FlowDesigner
 // uses for its single-flow Import/Export buttons.
@@ -239,6 +257,14 @@ watch(visibleSections, (vs) => {
 // ──────────────────────────────────────────────────────────────────────
 // Data sources
 // ──────────────────────────────────────────────────────────────────────
+// Centralised Ask-Agent chat dialog (top-bar button). Open state is
+// owned by HomePage so the same instance survives sidebar navigation.
+const orchestratorOpen = ref(false);
+
+// When the agent finishes saving a workflow / agent / plugin we
+// refresh the underlying tables so the new row shows up immediately.
+function onOrchestratorSaved(_evt) { reload(); }
+
 const wf_rows      = ref([]);
 const trigger_rows = ref([]);
 const config_rows  = ref([]);
@@ -669,6 +695,20 @@ function notify(message, type = "positive") {
 </script>
 
 <style scoped>
+/* Ask Agent button — soft primary chip in the top toolbar so it
+   reads as a feature affordance rather than a regular icon button.
+   Sits to the right of the title; the avatar/theme cluster from
+   UserMenu still floats over the right edge. */
+.ask-agent-btn {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 18px;
+  padding: 4px 14px;
+  margin-right: 12px;
+  font-weight: 500;
+}
+.ask-agent-btn:hover { background: var(--primary-soft); filter: brightness(0.97); }
+
 /*
   Light-themed activity bar. Surface tones match the rest of the app
   (light Quasar theme + brand primary #2f6df3 from main.js).

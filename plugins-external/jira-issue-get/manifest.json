@@ -1,0 +1,46 @@
+{
+  "name":          "jira.issue.get",
+  "version":       "0.1.0",
+  "description":   "Fetch a single Jira Cloud issue by key. Auth via a workspace 'generic' config holding host, email, and apiToken.",
+  "primaryOutput": "issue",
+
+  "configRefs": [
+    {
+      "name":        "jira",
+      "type":        "generic",
+      "required":    true,
+      "description": "Generic config containing host (https://acme.atlassian.net), email, apiToken."
+    }
+  ],
+
+  "inputSchema": {
+    "type": "object",
+    "required": ["issueKey"],
+    "properties": {
+      "issueKey":  { "type": "string", "description": "Issue key, e.g. ACME-123." },
+      "config":    { "type": "string", "description": "Workspace config name. Default: 'jira'." },
+      "fields":    {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Restrict response fields, e.g. ['summary','status','assignee']. Omit for all."
+      },
+      "expand":    {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Jira `expand` query, e.g. ['renderedFields','changelog']."
+      },
+      "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 60000, "default": 15000 }
+    }
+  },
+
+  "outputSchema": {
+    "type": "object",
+    "required": ["ok", "issue"],
+    "properties": {
+      "ok":     { "type": "boolean" },
+      "status": { "type": "integer" },
+      "issue":  { "type": "object", "description": "Jira issue object as returned by GET /rest/api/3/issue/{key}." },
+      "url":    { "type": "string" }
+    }
+  }
+}

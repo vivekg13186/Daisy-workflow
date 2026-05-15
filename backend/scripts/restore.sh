@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Daisy-DAG Postgres restore script.
+# Daisy-workflow Postgres restore script.
 #
 # Usage:
 #

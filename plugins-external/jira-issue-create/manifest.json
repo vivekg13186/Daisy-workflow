@@ -1,0 +1,46 @@
+{
+  "name":          "jira.issue.create",
+  "version":       "0.1.0",
+  "description":   "Create a Jira Cloud issue. Description and any rich-text custom fields accept plain text — the plugin wraps them in Atlassian Document Format automatically.",
+  "primaryOutput": "issue",
+
+  "configRefs": [
+    {
+      "name":        "jira",
+      "type":        "generic",
+      "required":    true,
+      "description": "Generic config containing host (https://acme.atlassian.net), email, apiToken."
+    }
+  ],
+
+  "inputSchema": {
+    "type": "object",
+    "required": ["projectKey", "summary"],
+    "properties": {
+      "projectKey":  { "type": "string", "description": "Project key, e.g. ACME." },
+      "summary":     { "type": "string", "description": "Issue summary (title)." },
+      "issueType":   { "type": "string", "description": "Issue type name, e.g. 'Task', 'Bug', 'Story'. Defaults to 'Task'." },
+      "description": { "type": "string", "description": "Issue description body. Plain text gets wrapped into ADF; pass a stringified ADF object to forward as-is." },
+      "assignee":    { "type": "string", "description": "Assignee accountId (NOT email — Jira Cloud requires accountId)." },
+      "reporter":    { "type": "string", "description": "Reporter accountId." },
+      "priority":    { "type": "string", "description": "Priority name, e.g. 'High'." },
+      "labels":      { "type": "array", "items": { "type": "string" } },
+      "components":  { "type": "array", "items": { "type": "string" }, "description": "Component names." },
+      "dueDate":     { "type": "string", "description": "YYYY-MM-DD." },
+      "customFields":{ "type": "object", "description": "Map of customfield_XXXXX → value." },
+      "config":      { "type": "string", "description": "Workspace config name. Default: 'jira'." },
+      "timeoutMs":   { "type": "integer", "minimum": 1, "maximum": 60000, "default": 15000 }
+    }
+  },
+
+  "outputSchema": {
+    "type": "object",
+    "required": ["ok", "issue"],
+    "properties": {
+      "ok":     { "type": "boolean" },
+      "status": { "type": "integer" },
+      "issue":  { "type": "object", "description": "Jira's create response: { id, key, self }." },
+      "url":    { "type": "string", "description": "Browser URL of the created issue." }
+    }
+  }
+}

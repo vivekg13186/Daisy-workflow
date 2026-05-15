@@ -32,10 +32,10 @@ services:
   backend:
     profiles: ["full"]
     # When BACKEND_IMAGE is set in your environment (e.g.
-    # BACKEND_IMAGE=vivek13186/daisy-dag-backend:latest), compose
+    # BACKEND_IMAGE=vivek13186/daisy-workflow-backend:latest), compose
     # pulls that image and skips the local build. Unset → builds
     # locally from ./backend.
-    image: ${BACKEND_IMAGE:-daisy-dag-backend:local}
+    image: ${BACKEND_IMAGE:-daisy-workflow-backend:local}
     build:
       context: ./backend
       dockerfile: ../docker/backend.Dockerfile
@@ -68,7 +68,7 @@ services:
     profiles: ["full"]
     # Same pattern as backend — set FRONTEND_IMAGE to pull from
     # Docker Hub instead of building locally.
-    image: ${FRONTEND_IMAGE:-daisy-dag-frontend:local}
+    image: ${FRONTEND_IMAGE:-daisy-workflow-frontend:local}
     build:
       context: ./frontend
       dockerfile: ../docker/frontend.Dockerfile
