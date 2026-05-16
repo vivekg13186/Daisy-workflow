@@ -5,20 +5,52 @@
 
   "plugins": [
     {
-      "name":            "reddit.search",
+      "name":            "jira",
       "version":         "0.1.0",
-      "summary":         "Search public Reddit posts via the official JSON API.",
-      "category":        "social",
-      "tags":            ["reddit", "search", "social"],
-      "homepage":        "https://github.com/vivekg13186/Daisy-workflow",
+      "summary":         "Jira Cloud connector — read / create / update / delete issues, JQL search, comments, transitions. One node, many operations.",
+      "category":        "project-management",
+      "tags":            ["jira", "atlassian", "issue-tracking", "project-management"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-jira",
 
-      "containerImage":  "ghcr.io/vivekg13186/reddit-plugin:0.1.0",
+      "containerImage":  "vivek13186/daisy-plugin-jira:latest",
       "containerPort":   8080,
 
-      "manifestUrl":     "https://raw.githubusercontent.com/vivekg13186/Daisy-workflow/main/plugins-external/reddit/manifest.json",
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-jira/main/manifest.json",
       "manifestSha256":  null,
 
-      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#reddit.search@0.1.0"
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#jira@0.1.0"
+    },
+    {
+      "name":            "google-sheets",
+      "version":         "0.1.0",
+      "summary":         "Google Sheets connector — read, append, update, clear, delete rows; create or inspect spreadsheets. Auth via Google service-account JSON.",
+      "category":        "productivity",
+      "tags":            ["google", "google-sheets", "spreadsheet", "productivity"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-google-sheet",
+
+      "containerImage":  "vivek13186/daisy-plugin-google-sheets:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-google-sheet/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#google-sheets@0.1.0"
+    },
+    {
+      "name":            "microsoft-teams",
+      "version":         "0.1.0",
+      "summary":         "Microsoft Teams connector — list teams / channels / chats, create channels, send messages. Auth via Azure AD app registration (client credentials).",
+      "category":        "communication",
+      "tags":            ["microsoft", "teams", "azure", "chat", "communication"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-microsoft-teams",
+
+      "containerImage":  "vivek13186/daisy-plugin-microsoft-teams:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-microsoft-teams/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#microsoft-teams@0.1.0"
     }
   ]
 }

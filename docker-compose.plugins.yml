@@ -1,7 +1,6 @@
 # External-plugin overlay.
 #
-# Bring up Daisy + every plugin that ships in plugins-external/ in one
-# command:
+# Bring up Daisy + every plugin in one command:
 #
 #   docker compose \
 #     -f docker-compose.yml \
@@ -9,26 +8,35 @@
 #     --profile full \
 #     up -d
 #
-# The Jira family ships under its own profile so you can pull it in
-# without dragging reddit (or anything else later) along:
+# Plugin services pull pre-built images from Docker Hub:
+#
+#   vivek13186/daisy-plugin-jira
+#   vivek13186/daisy-plugin-google-sheets
+#   vivek13186/daisy-plugin-microsoft-teams
+#
+# Upgrades are `docker compose pull <svc> && docker compose up -d <svc>`.
+# Pin a tag in the image string below (`:0.2.0`, `:latest`, etc.) to
+# control which build runs.
+#
+# The local plugins-external/<plugin>/ folders stay in place for
+# offline / SDK-development workflows; swap the `image:` line for a
+# `build: { context: ./plugins-external/<plugin> }` block to run from
+# source instead.
+#
+# Per-plugin profiles let you bring up only what you need:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.plugins.yml \
 #     --profile jira up -d
 #
 # Daisy itself doesn't auto-discover these containers — you have to
 # install each one once via the admin UI (or `npm run install-plugin
-# -- --endpoint http://reddit-plugin:8080`). After that the plugin
+# -- --endpoint http://<container-name>:8080`). After that the plugin
 # row lives in DB and survives restarts; the worker picks it up at
 # boot via registry.loadAll().
 #
-# Adding more plugins:
-#   1. Drop the plugin source under plugins-external/<name>/.
-#   2. Add a service block here pointing at its Dockerfile.
-#   3. After `up -d`, run `npm run install-plugin -- --endpoint http://<name>-plugin:8080`.
-#
 # Plugins share the same internal docker network as the backend; the
 # install endpoint URL uses the container name, e.g.
-# `http://reddit-plugin:8080`.
+# `http://daisy-jira:8080`.
 
 services:
   reddit-plugin:
@@ -63,7 +71,6 @@ services:
   # One container, one Daisy node. The action is selected per-node via the
   # `operation` input (issue.get / issue.create / issue.update / issue.delete
   # / issue.search / issue.comment.add / issue.transition / issue.transitions.list).
-  # Mirrors n8n's Jira node.
   #
   # Auth: workspace `generic` config (default name "jira") holding
   # host / email / apiToken. Create one on the Configurations page in the
@@ -74,10 +81,64 @@ services:
 
   daisy-jira:
     profiles: ["jira", "full"]
-    build:
-      context: .
-      dockerfile: plugins-external/jira/Dockerfile
+    image: vivek13186/daisy-plugin-jira:latest
     container_name: daisy-jira
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── Google Sheets plugin ───────────────────────────────────────────
+  # One container, one Daisy node. The action is selected per-node via
+  # the `operation` input (sheet.get / sheet.append / sheet.update /
+  # sheet.clear / sheet.delete-rows / spreadsheet.create / spreadsheet.get).
+  #
+  # Auth: workspace `generic` config (default name "google") with a
+  # `credentialsJson` field holding the entire service-account JSON file
+  # from Google Cloud Console. Share each target spreadsheet with the
+  # service account's client_email (Editor for writes, Viewer for reads).
+  #
+  # After `up -d`:
+  #   npm run install-plugin -- --endpoint http://daisy-google-sheets:8080
+
+  daisy-google-sheets:
+    profiles: ["google-sheets", "full"]
+    image: vivek13186/daisy-plugin-google-sheets:latest
+    container_name: daisy-google-sheets
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── Microsoft Teams plugin ─────────────────────────────────────────
+  # One container, one Daisy node. The action is selected per-node via
+  # the `operation` input (team.list / channel.list / channel.create /
+  # channel.message.send / channel.message.list / chat.list /
+  # chat.message.send / chat.message.list).
+  #
+  # Auth: workspace `generic` config (default name "microsoft-teams")
+  # with tenantId / clientId / clientSecret from an Azure AD (Entra)
+  # app registration that has the appropriate Microsoft Graph
+  # application permissions. See plugins-external/microsoft-teams/README.md
+  # for the permission list and one-time setup.
+  #
+  # After `up -d`:
+  #   npm run install-plugin -- --endpoint http://daisy-microsoft-teams:8080
+
+  daisy-microsoft-teams:
+    profiles: ["microsoft-teams", "full"]
+    image: vivek13186/daisy-plugin-microsoft-teams:latest
+    container_name: daisy-microsoft-teams
     restart: unless-stopped
     environment:
       PORT: "8080"
